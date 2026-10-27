@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=jtlabwc
+Comment=A Wayland stacking compositor
+Exec=jtlabwc
+Icon=jtlabwc
+Type=Application
+DesktopNames=labwc;wlroots
