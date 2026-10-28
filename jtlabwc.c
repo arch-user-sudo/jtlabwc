@@ -483,31 +483,7 @@ enum lab_window_type {
 	LAB_WINDOW_TYPE_LEN
 };
 
-enum window_switcher_order {
-	WINDOW_SWITCHER_ORDER_FOCUS,
-	WINDOW_SWITCHER_ORDER_AGE,
-};
 
-enum cycle_osd_style {
-	CYCLE_OSD_STYLE_CLASSIC,
-	CYCLE_OSD_STYLE_THUMBNAIL,
-};
-
-enum cycle_workspace_filter {
-	CYCLE_WORKSPACE_ALL,
-	CYCLE_WORKSPACE_CURRENT,
-};
-
-enum cycle_output_filter {
-	CYCLE_OUTPUT_ALL,
-	CYCLE_OUTPUT_CURSOR,
-	CYCLE_OUTPUT_FOCUSED,
-};
-
-enum cycle_app_id_filter {
-	CYCLE_APP_ID_ALL,
-	CYCLE_APP_ID_CURRENT,
-};
 
 #endif /* LABWC_CONFIG_TYPES_H */
 
@@ -910,7 +886,7 @@ enum lab_node_type {
 	LAB_NODE_FRAME,
 	LAB_NODE_ROOT,
 	LAB_NODE_MENUITEM,
-	LAB_NODE_CYCLE_OSD_ITEM,
+
 	LAB_NODE_LAYER_SURFACE,
 	LAB_NODE_UNMANAGED,
 	LAB_NODE_ALL,
@@ -1011,9 +987,6 @@ struct rcxml {
 	uint32_t raise_on_focus_delay_ms;
 
 	/* theme */
-	char *icon_theme_name;
-	char *fallback_app_icon_name;
-
 	enum lab_node_type title_buttons_left[TITLE_BUTTONS_MAX];
 	int nr_title_buttons_left;
 	enum lab_node_type title_buttons_right[TITLE_BUTTONS_MAX];
@@ -1079,27 +1052,12 @@ struct rcxml {
 	/* Regions */
 	struct wl_list regions;  /* struct region.link */
 
-	/* Window Switcher */
-	struct {
-		bool preview;
-		bool outlines;
-		bool unshade;
-		enum window_switcher_order order;
-		enum cycle_workspace_filter workspace_filter; /* deprecated */
-		struct {
-			bool show;
-			enum cycle_osd_style style;
-			enum cycle_output_filter output_filter;
-			char *thumbnail_label_format;
-			struct wl_list fields;  /* struct cycle_osd_field.link */
-		} osd;
-	} window_switcher;
+
 
 	struct wl_list window_rules; /* struct window_rule.link */
 
 	/* Menu */
 	unsigned int menu_ignore_button_release_period;
-	bool menu_show_icons;
 };
 
 /* defined in main.c */
@@ -1111,177 +1069,6 @@ void rcxml_finish(void);
 uint32_t parse_privileged_interface(const char *name);
 
 #endif /* LABWC_RCXML_H */
-
-
-/* ===== header: include/cycle.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_CYCLE_H
-#define LABWC_CYCLE_H
-
-#include <stdbool.h>
-#include <wayland-server-core.h>
-
-struct output;
-struct wlr_box;
-
-enum lab_cycle_dir {
-	LAB_CYCLE_DIR_NONE,
-	LAB_CYCLE_DIR_FORWARD,
-	LAB_CYCLE_DIR_BACKWARD,
-};
-
-/* TODO: add field with keyboard layout? */
-enum cycle_osd_field_content {
-	LAB_FIELD_NONE = 0,
-	LAB_FIELD_TYPE,
-	LAB_FIELD_TYPE_SHORT,
-	LAB_FIELD_IDENTIFIER,
-	LAB_FIELD_TRIMMED_IDENTIFIER,
-	LAB_FIELD_ICON,
-	LAB_FIELD_DESKTOP_ENTRY_NAME,
-	LAB_FIELD_TITLE,
-	LAB_FIELD_TITLE_SHORT,
-	LAB_FIELD_WORKSPACE,
-	LAB_FIELD_WORKSPACE_SHORT,
-	LAB_FIELD_WIN_STATE,
-	LAB_FIELD_WIN_STATE_ALL,
-	LAB_FIELD_OUTPUT,
-	LAB_FIELD_OUTPUT_SHORT,
-	LAB_FIELD_CUSTOM,
-
-	LAB_FIELD_COUNT
-};
-
-struct cycle_osd_field {
-	enum cycle_osd_field_content content;
-	int width;
-	char *format;
-	struct wl_list link; /* struct rcxml.window_switcher.osd.fields */
-};
-
-struct cycle_filter {
-	enum cycle_workspace_filter workspace;
-	enum cycle_output_filter output;
-	enum cycle_app_id_filter app_id;
-};
-
-struct cycle_state {
-	struct view *selected_view;
-	struct wl_list views;
-	struct wl_list osd_outputs; /* struct cycle_osd_output.link */
-	bool preview_was_shaded;
-	bool preview_was_enabled;
-	struct wlr_scene_node *preview_node;
-	struct wlr_scene_node *preview_dummy;
-	struct lab_scene_rect *preview_outline;
-	struct cycle_filter filter;
-};
-
-struct cycle_osd_output {
-	struct wl_list link; /* struct cycle_state.osd_outputs */
-	struct output *output;
-	struct wl_listener tree_destroy;
-
-	/* set by cycle_osd_impl->init() */
-	struct wl_list items; /* struct cycle_osd_item.link */
-	struct wlr_scene_tree *tree;
-	/* set by cycle_osd_impl->init() and moved by cycle_osd_scroll_update() */
-	struct wlr_scene_tree *items_tree;
-
-	/* used in osd-scroll.c */
-	struct cycle_osd_scroll_context {
-		int top_row_idx;
-		int nr_rows, nr_cols, nr_visible_rows;
-		int delta_y;
-		struct wlr_box bar_area;
-		struct wlr_scene_tree *bar_tree;
-		struct lab_scene_rect *bar;
-	} scroll;
-};
-
-struct buf;
-struct view;
-struct server;
-struct wlr_scene_node;
-
-/* Begin window switcher */
-void cycle_begin(enum lab_cycle_dir direction,
-	struct cycle_filter filter);
-
-/* Cycle the selected view in the window switcher */
-void cycle_step(enum lab_cycle_dir direction);
-
-/* Closes the OSD */
-void cycle_finish(bool switch_focus);
-
-/* Re-initialize the window switcher */
-void cycle_reinitialize(void);
-
-/* Immediately cycle to next/previous window */
-void cycle_immediate(enum lab_cycle_dir direction,
-	struct cycle_filter filter);
-
-/* Focus the clicked window and close OSD */
-void cycle_on_cursor_release(struct wlr_scene_node *node);
-
-/* Used by osd.c internally to render window switcher fields */
-void cycle_osd_field_get_content(struct cycle_osd_field *field,
-	struct buf *buf, struct view *view);
-/* Sets view info to buf according to format */
-void cycle_osd_field_set_custom(struct buf *buf, struct view *view,
-	const char *format);
-
-/* Used by rcxml.c when parsing the config */
-void cycle_osd_field_arg_from_xml_node(struct cycle_osd_field *field,
-	const char *nodename, const char *content);
-bool cycle_osd_field_is_valid(struct cycle_osd_field *field);
-void cycle_osd_field_free(struct cycle_osd_field *field);
-
-/* Internal API */
-struct cycle_osd_item {
-	struct view *view;
-	struct wlr_scene_tree *tree;
-	struct wl_list link;
-};
-
-struct cycle_osd_impl {
-	/*
-	 * Create a scene-tree of OSD for an output and fill
-	 * osd_output->items.
-	 */
-	void (*init)(struct cycle_osd_output *osd_output);
-	/*
-	 * Update the OSD to highlight server.cycle.selected_view.
-	 */
-	void (*update)(struct cycle_osd_output *osd_output);
-};
-
-#define SCROLLBAR_W 10
-
-/**
- * Initialize the context and scene for scrolling OSD items.
- *
- * @output: Output of the OSD
- * @bar_area: Area where the scrollbar is drawn
- * @delta_y: The vertical delta by which items are scrolled (usually item height)
- * @nr_cols: Number of columns in the OSD
- * @nr_rows: Number of rows in the OSD
- * @nr_visible_rows: Number of visible rows in the OSD
- * @border_color: Border color of the scrollbar
- * @bg_color: Background color of the scrollbar
- */
-void cycle_osd_scroll_init(struct cycle_osd_output *osd_output,
-	struct wlr_box bar_area, int delta_y,
-	int nr_cols, int nr_rows, int nr_visible_rows,
-	float *border_color, float *bg_color);
-
-/* Scroll the OSD to show server.cycle.selected_view if needed */
-void cycle_osd_scroll_update(struct cycle_osd_output *osd_output);
-
-extern struct cycle_osd_impl cycle_osd_classic_impl;
-extern struct cycle_osd_impl cycle_osd_thumbnail_impl;
-
-#endif // LABWC_CYCLE_H
 
 
 /* ===== header: include/input/input.h ===== */
@@ -1386,8 +1173,6 @@ int key_state_nr_bound_keys(void);
 
 
 /* ===== header: include/config.h ===== */
-#define GETTEXT_PACKAGE "labwc"
-#define LOCALEDIR "/usr/local/share/locale"
 #define PACKAGE_NAME "jtlabwc"
 #define PACKAGE_VERSION "0.20.2"
 #define LABWC_VERSION "0.20.2"
@@ -1406,9 +1191,6 @@ int key_state_nr_bound_keys(void);
 #else
 #define HAVE_XWAYLAND 0
 #endif
-#define HAVE_LIBSFDO 1
-#define HAVE_RSVG 1
-#define HAVE_NLS 1
 #define HAVE_LIBINPUT_CONFIG_QUIRKS 1
 #define HAVE_LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM_SET_ENABLED 1
 
@@ -1658,7 +1440,6 @@ enum input_mode {
 	LAB_INPUT_STATE_MOVE,
 	LAB_INPUT_STATE_RESIZE,
 	LAB_INPUT_STATE_MENU,
-	LAB_INPUT_STATE_CYCLE, /* a.k.a. window switching */
 };
 
 struct seat {
@@ -1812,9 +1593,6 @@ struct server {
 	struct wl_listener xdg_activation_request;
 	struct wl_listener xdg_activation_new_token;
 
-	struct wlr_xdg_toplevel_icon_manager_v1 *xdg_toplevel_icon_manager;
-	struct wl_listener xdg_toplevel_icon_set_icon;
-
 	struct {
 		struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *manager;
 		struct {
@@ -1869,7 +1647,6 @@ struct server {
 	/* Tree for unmanaged xsurfaces without initialized view (usually popups) */
 	struct wlr_scene_tree *unmanaged_tree;
 #endif
-	struct wlr_scene_tree *cycle_preview_tree;
 	/* Tree for built in menu */
 	struct wlr_scene_tree *menu_tree;
 
@@ -1935,13 +1712,8 @@ struct server {
 
 	struct wlr_security_context_manager_v1 *security_context_manager_v1;
 
-	/* Set when in cycle (alt-tab) mode */
-	struct cycle_state cycle;
-
 	struct menu *menu_current;
 	struct wl_list menus;
-
-	struct sfdo *sfdo;
 
 	pid_t primary_client_pid;
 
@@ -2111,7 +1883,6 @@ enum menuitem_type {
 struct menuitem {
 	struct wl_list actions;
 	char *text;
-	char *icon_name;
 	const char *arrow;
 	uint32_t accelerator;
 	struct menu *parent;
@@ -2144,7 +1915,6 @@ struct menu {
 	} selection;
 	struct wlr_scene_tree *scene_tree;
 	bool align_left;
-	bool has_icons;
 
 	/* Used to match a window-menu to the view that triggered it. */
 	struct view *triggered_by_view;  /* may be NULL */
@@ -2232,7 +2002,6 @@ struct output {
 	struct wlr_scene_output *scene_output;
 	struct wlr_scene_tree *layer_tree[LAB_NR_LAYERS];
 	struct wlr_scene_tree *layer_popup_tree;
-	struct wlr_scene_tree *cycle_osd_tree;
 	struct wlr_scene_tree *session_lock_tree;
 	struct wlr_scene_buffer *workspace_osd;
 
@@ -2628,41 +2397,9 @@ struct theme {
 	float osd_border_color[4];
 	float osd_label_text_color[4];
 
-	struct window_switcher_classic_theme {
-		int width;
-		int padding;
-		int item_padding_x;
-		int item_padding_y;
-		int item_active_border_width;
-		float item_active_border_color[4];
-		float item_active_bg_color[4];
-		int item_icon_size;
-		bool width_is_percent;
 
-		/*
-		 * Not set in rc.xml/themerc, but derived from the tallest
-		 * titlebar object plus 2 * window_titlebar_padding_height
-		 */
-		int item_height;
-	} osd_window_switcher_classic;
 
-	struct window_switcher_thumbnail_theme {
-		int max_width;
-		int padding;
-		int item_width;
-		int item_height;
-		int item_padding;
-		int item_active_border_width;
-		float item_active_border_color[4];
-		float item_active_bg_color[4];
-		int item_icon_size;
-		bool max_width_is_percent;
 
-		int title_height;
-	} osd_window_switcher_thumbnail;
-
-	int osd_window_switcher_preview_border_width;
-	float osd_window_switcher_preview_border_color[3][4];
 
 	int osd_workspace_switcher_boxes_width;
 	int osd_workspace_switcher_boxes_height;
@@ -2685,22 +2422,6 @@ void theme_init(struct theme *theme);
 void theme_finish(struct theme *theme);
 
 #endif /* LABWC_THEME_H */
-
-
-/* ===== header: include/translate.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_TRANSLATE_H
-#define LABWC_TRANSLATE_H
-
-#if HAVE_NLS
-#include <libintl.h>
-#include <locale.h>
-#define _ gettext
-#else
-#define _(s) (s)
-#endif
-
-#endif /* LABWC_TRANSLATE_H */
 
 
 /* ===== header: include/view.h ===== */
@@ -2974,12 +2695,6 @@ struct view {
 
 	struct foreign_toplevel *foreign_toplevel;
 
-	/* used by scaled_icon_buffer */
-	struct {
-		char *name;
-		struct wl_array buffers; /* struct lab_data_buffer * */
-	} icon;
-
 	struct {
 		struct wl_signal new_app_id;
 		struct wl_signal new_title;
@@ -2989,11 +2704,6 @@ struct view {
 		struct wl_signal fullscreened;
 		struct wl_signal activated;     /* bool *activated */
 		struct wl_signal always_on_top;
-		/*
-		 * This is emitted when app_id, or icon set via xdg_toplevel_icon
-		 * is updated. This is listened by scaled_icon_buffer.
-		 */
-		struct wl_signal set_icon;
 		struct wl_signal destroy;
 	} events;
 };
@@ -3319,10 +3029,6 @@ void view_reload_ssd(struct view *view);
 
 void view_set_shade(struct view *view, bool shaded);
 
-/* Icon buffers set with this function are dropped later */
-void view_set_icon(struct view *view, const char *icon_name,
-	struct wl_array *buffers);
-
 struct view_size_hints view_get_size_hints(struct view *view);
 void view_adjust_size(struct view *view, int *w, int *h);
 
@@ -3450,13 +3156,6 @@ struct lab_data_buffer *buffer_create_from_data(void *pixel_data, uint32_t width
 	uint32_t height, uint32_t stride);
 
 /*
- * Create a lab_data_buffer from a wlr_buffer by copying its content.
- * The wlr_buffer must be backed by shm.
- */
-struct lab_data_buffer *buffer_create_from_wlr_buffer(
-	struct wlr_buffer *wlr_buffer);
-
-/*
  * Resize a buffer to the given size. The source buffer is rendered at the
  * center of the output buffer and shrunk if it overflows from the output buffer.
  */
@@ -3504,34 +3203,6 @@ struct wlr_fbox box_to_fbox(struct wlr_box *box);
 #endif /* LABWC_BOX_H */
 
 
-/* ===== header: include/desktop-entry.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_DESKTOP_ENTRY_H
-#define LABWC_DESKTOP_ENTRY_H
-#if HAVE_LIBSFDO
-
-struct server;
-
-void desktop_entry_init(void);
-void desktop_entry_finish(void);
-
-struct lab_img *desktop_entry_load_icon_from_app_id(const char *app_id, int size, float scale);
-
-struct lab_img *desktop_entry_load_icon(const char *icon_name, int size, float scale);
-
-/**
- * desktop_entry_name_lookup() - return the application name
- * from the sfdo desktop entry database based on app_id
- *
- * The lifetime of the returned value is the same as that
- * of sfdo_desktop_db (from `struct sfdo.desktop_db`)
- */
-const char *desktop_entry_name_lookup(const char *app_id);
-
-#endif /* HAVE_LIBSFDO */
-#endif /* LABWC_DESKTOP_ENTRY_H */
-
-
 /* ===== header: include/img/img.h ===== */
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef LABWC_IMG_H
@@ -3541,27 +3212,17 @@ const char *desktop_entry_name_lookup(const char *app_id);
 #include <stdbool.h>
 #include <wayland-util.h>
 
-enum lab_img_type {
-	LAB_IMG_PNG,
-	LAB_IMG_SVG,
-	LAB_IMG_XBM,
-	LAB_IMG_XPM,
-};
-
 struct lab_img {
 	struct wl_array modifiers; /* lab_img_modifier_func_t */
 	struct lab_img_data *data;
 };
 
-struct lab_img *lab_img_load(enum lab_img_type type, const char *path,
-	float *xbm_color);
-
 /**
  * lab_img_load_from_bitmap() - create button from monochrome bitmap
- * @bitmap: bitmap data array in hexadecimal xbm format
+ * @bitmap: six bytes, one per row, least-significant six bits are pixels
  * @rgba: color
  *
- * Example bitmap: char button[6] = { 0x3f, 0x3f, 0x21, 0x21, 0x21, 0x3f };
+ * The bitmap is a 6x6 monochrome built-in button glyph.
  */
 struct lab_img *lab_img_load_from_bitmap(const char *bitmap, float *rgba);
 
@@ -3746,7 +3407,6 @@ struct node_descriptor {
  * @type: node descriptor type
  * @view: associated view
  * @data: struct to point to as follows:
- *   - LAB_NODE_CYCLE_OSD_ITEM struct cycle_osd_item
  *   - LAB_NODE_LAYER_SURFACE  struct lab_layer_surface
  *   - LAB_NODE_LAYER_POPUP    struct lab_layer_popup
  *   - LAB_NODE_MENUITEM       struct menuitem
@@ -3775,12 +3435,7 @@ struct lab_layer_surface *node_layer_surface_from_node(
 struct menuitem *node_menuitem_from_node(
 	struct wlr_scene_node *wlr_scene_node);
 
-/**
- * node_cycle_osd_item_from_node - return cycle OSD item struct from node
- * @wlr_scene_node: wlr_scene_node from which to return data
- */
-struct cycle_osd_item *node_cycle_osd_item_from_node(
-	struct wlr_scene_node *wlr_scene_node);
+
 
 /**
  * node_try_ssd_button_from_node - return ssd_button or NULL from node
@@ -3855,58 +3510,6 @@ void scaled_font_buffer_update_markup(struct scaled_font_buffer *self,
 	const float *bg_color, bool use_markup);
 
 #endif /* LABWC_SCALED_FONT_BUFFER_H */
-
-
-/* ===== header: include/scaled-buffer/scaled-icon-buffer.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_SCALED_ICON_BUFFER_H
-#define LABWC_SCALED_ICON_BUFFER_H
-
-#include <stdbool.h>
-#include <wayland-server-core.h>
-
-struct wlr_scene_tree;
-struct wlr_scene_node;
-struct wlr_scene_buffer;
-
-struct scaled_icon_buffer {
-	struct scaled_buffer *scaled_buffer;
-	struct wlr_scene_buffer *scene_buffer;
-	/* for window icon */
-	struct view *view;
-	char *view_app_id;
-	char *view_icon_name;
-	bool view_icon_prefer_client;
-	struct wl_array view_icon_buffers;
-	struct {
-		struct wl_listener new_app_id;
-		struct wl_listener new_title;
-		struct wl_listener set_icon;
-		struct wl_listener destroy;
-	} on_view;
-	/* for general icon (e.g. in menus) */
-	char *icon_name;
-
-	int width;
-	int height;
-};
-
-/*
- * Create an auto scaling icon buffer, providing a wlr_scene_buffer node for
- * display. It gets destroyed automatically when the backing scaled_buffer
- * is being destroyed which in turn happens automatically when the backing
- * wlr_scene_buffer (or one of its parents) is being destroyed.
- */
-struct scaled_icon_buffer *scaled_icon_buffer_create(
-	struct wlr_scene_tree *parent, int width, int height);
-
-void scaled_icon_buffer_set_view(struct scaled_icon_buffer *self,
-	struct view *view);
-
-void scaled_icon_buffer_set_icon_name(struct scaled_icon_buffer *self,
-	const char *icon_name);
-
-#endif /* LABWC_SCALED_ICON_BUFFER_H */
 
 
 /* ===== header: include/common/parse-double.h ===== */
@@ -4132,18 +3735,6 @@ struct scaled_buffer_cache_entry {
 #endif /* LABWC_SCALED_BUFFER_H */
 
 
-/* ===== header: include/img/img-xpm.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_IMG_XPM_H
-#define LABWC_IMG_XPM_H
-
-struct lab_data_buffer;
-
-struct lab_data_buffer *img_xpm_load(const char *filename);
-
-#endif /* LABWC_IMG_XPM_H */
-
-
 /* ===== header: include/img/img-xbm.h ===== */
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef LABWC_IMG_XBM_H
@@ -4153,44 +3744,14 @@ struct lab_data_buffer;
 
 /**
  * img_xbm_load_from_bitmap() - create button from monochrome bitmap
- * @bitmap: bitmap data array in hexadecimal xbm format
+ * @bitmap: six bytes, one per row, least-significant six bits are pixels
  * @rgba: color
  *
- * Example bitmap: char button[6] = { 0x3f, 0x3f, 0x21, 0x21, 0x21, 0x3f };
+ * The bitmap is a 6x6 monochrome built-in button glyph.
  */
 struct lab_data_buffer *img_xbm_load_from_bitmap(const char *bitmap, float *rgba);
 
-/* img_xbm_load - Convert xbm file to buffer with cairo surface */
-struct lab_data_buffer *img_xbm_load(const char *filename, float *rgba);
-
 #endif /* LABWC_IMG_XBM_H */
-
-
-/* ===== header: include/img/img-svg.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_IMG_SVG_H
-#define LABWC_IMG_SVG_H
-
-#include <librsvg/rsvg.h>
-
-struct lab_data_buffer;
-
-RsvgHandle *img_svg_load(const char *filename);
-
-struct lab_data_buffer *img_svg_render(RsvgHandle *svg, int w, int h,
-	double scale);
-
-#endif /* LABWC_IMG_SVG_H */
-
-
-/* ===== header: include/img/img-png.h ===== */
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef LABWC_IMG_PNG_H
-#define LABWC_IMG_PNG_H
-
-struct lab_data_buffer *img_png_load(const char *filename);
-
-#endif /* LABWC_IMG_PNG_H */
 
 
 /* ===== header: include/window-rules.h ===== */
@@ -4234,7 +3795,6 @@ struct window_rule {
 	enum property ignore_focus_request;
 	enum property ignore_configure_request;
 	enum property fixed_position;
-	enum property icon_prefer_client;
 	enum property allow_always_on_top;
 
 	struct wl_list link; /* struct rcxml.window_rules */
@@ -4297,7 +3857,6 @@ struct scaled_img_buffer {
  *           |                `-----------------.       to apply on top of lib_img_data
  *           |                                  |       when rendering
  *           | provides (depending on backend): |     - lab_img_equal() comparing the
- *           | - librsvg handle                 |       lab_img_data reference and
  *           | - cairo surface                  |       modification function pointers
  *           ´----------------------------------`       of two given lab_img instances
  *
@@ -6283,7 +5842,6 @@ struct xwayland_view {
 	struct wl_listener set_override_redirect;
 	struct wl_listener set_strut_partial;
 	struct wl_listener set_window_type;
-	struct wl_listener set_icon;
 	struct wl_listener focus_in;
 
 	/* Not (yet) implemented */
@@ -7942,29 +7500,29 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE:
 		if (!strcasecmp(argument, "workspace")) {
 			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_WORKSPACE_ALL);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else if (!strcasecmp(content, "current")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_WORKSPACE_CURRENT);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else {
 			}
 			goto cleanup;
 		}
 		if (!strcasecmp(argument, "output")) {
 			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_OUTPUT_ALL);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else if (!strcasecmp(content, "cursor")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_OUTPUT_CURSOR);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else if (!strcasecmp(content, "focused")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_OUTPUT_FOCUSED);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else {
 			}
 			goto cleanup;
 		}
 		if (!strcasecmp(argument, "identifier")) {
 			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_APP_ID_ALL);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else if (!strcasecmp(content, "current")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, CYCLE_APP_ID_CURRENT);
+				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
 			} else {
 			}
 			goto cleanup;
@@ -8543,36 +8101,48 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 		break;
 	case ACTION_TYPE_NEXT_WINDOW:
 	case ACTION_TYPE_PREVIOUS_WINDOW: {
-		enum lab_cycle_dir dir = (action->type == ACTION_TYPE_NEXT_WINDOW) ?
-			LAB_CYCLE_DIR_FORWARD : LAB_CYCLE_DIR_BACKWARD;
-		struct cycle_filter filter = {
-			.workspace = LABWC_src_action_c_action_get_int(action, "workspace",
-				rc.window_switcher.workspace_filter),
-			.output = LABWC_src_action_c_action_get_int(action, "output",
-				CYCLE_OUTPUT_ALL),
-			.app_id = LABWC_src_action_c_action_get_int(action, "identifier",
-				CYCLE_APP_ID_ALL),
-		};
-		if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
-			cycle_step(dir);
-		} else {
-			cycle_begin(dir, filter);
+			bool forward = action->type == ACTION_TYPE_NEXT_WINDOW;
+		enum lab_view_criteria criteria = LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
+			| LAB_VIEW_CRITERIA_NO_DIALOG;
+		struct wl_list *head = &server.views;
+		struct wl_list *from = forward && server.active_view
+			? &server.active_view->link : head;
+		for (struct wl_list *elm = (forward ? from->next : from->prev);
+				elm != head; elm = (forward ? elm->next : elm->prev)) {
+			struct view *v = wl_container_of(elm, view, link);
+			if (!view_matches_criteria(v, criteria)) {
+				continue;
+			}
+			if (server.active_view && forward) {
+				view_move_to_back(server.active_view);
+			}
+			desktop_focus_view(v, true);
+			break;
 		}
+		cursor_update_focus();
 		break;
 	}
 	case ACTION_TYPE_NEXT_WINDOW_IMMEDIATE:
 	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE: {
-		enum lab_cycle_dir dir = (action->type == ACTION_TYPE_NEXT_WINDOW_IMMEDIATE) ?
-			LAB_CYCLE_DIR_FORWARD : LAB_CYCLE_DIR_BACKWARD;
-		struct cycle_filter filter = {
-			.workspace = LABWC_src_action_c_action_get_int(action, "workspace",
-				rc.window_switcher.workspace_filter),
-			.output = LABWC_src_action_c_action_get_int(action, "output",
-				CYCLE_OUTPUT_ALL),
-			.app_id = LABWC_src_action_c_action_get_int(action, "identifier",
-				CYCLE_APP_ID_ALL),
-		};
-		cycle_immediate(dir, filter);
+		bool forward = action->type == ACTION_TYPE_NEXT_WINDOW_IMMEDIATE;
+		enum lab_view_criteria criteria = LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
+			| LAB_VIEW_CRITERIA_NO_DIALOG;
+		struct wl_list *head = &server.views;
+		struct wl_list *from = forward && server.active_view
+			? &server.active_view->link : head;
+		for (struct wl_list *elm = (forward ? from->next : from->prev);
+				elm != head; elm = (forward ? elm->next : elm->prev)) {
+			struct view *v = wl_container_of(elm, view, link);
+			if (!view_matches_criteria(v, criteria)) {
+				continue;
+			}
+			if (server.active_view && forward) {
+				view_move_to_back(server.active_view);
+			}
+			desktop_focus_view(v, true);
+			break;
+		}
+		cursor_update_focus();
 		break;
 	}
 	case ACTION_TYPE_SHOW_MENU:
@@ -9003,9 +8573,7 @@ actions_run(struct view *activator, struct wl_list *actions, struct cursor_conte
 
 	struct action *action;
 	wl_list_for_each(action, actions, link) {
-		if (server.input_mode == LAB_INPUT_STATE_CYCLE
-				&& action->type != ACTION_TYPE_NEXT_WINDOW
-				&& action->type != ACTION_TYPE_PREVIOUS_WINDOW) {
+		if (false) {
 			continue;
 		}
 
@@ -9180,31 +8748,6 @@ buffer_create_from_data(void *pixel_data, uint32_t width, uint32_t height,
 }
 
 struct lab_data_buffer *
-buffer_create_from_wlr_buffer(struct wlr_buffer *wlr_buffer)
-{
-	void *data;
-	uint32_t format;
-	size_t stride;
-	if (!wlr_buffer_begin_data_ptr_access(wlr_buffer,
-			WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
-		return NULL;
-	}
-	if (format != DRM_FORMAT_ARGB8888) {
-		/* TODO: support other formats */
-		wlr_buffer_end_data_ptr_access(wlr_buffer);
-		return NULL;
-	}
-	size_t buffer_size = stride * (size_t)wlr_buffer->height;
-	void *copied_data = xmalloc(buffer_size);
-	memcpy(copied_data, data, buffer_size);
-	wlr_buffer_end_data_ptr_access(wlr_buffer);
-
-	return buffer_create_from_data(copied_data,
-		(uint32_t)wlr_buffer->width, (uint32_t)wlr_buffer->height,
-		(uint32_t)stride);
-}
-
-struct lab_data_buffer *
 buffer_resize(struct lab_data_buffer *src_buffer, int width, int height,
 		double scale)
 {
@@ -9239,381 +8782,6 @@ buffer_resize(struct lab_data_buffer *src_buffer, int width, int height,
 	cairo_destroy(cairo);
 
 	return buffer;
-}
-
-
-/* ===== source: src/desktop-entry.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <locale.h>
-#include <sfdo-desktop.h>
-#include <sfdo-icon.h>
-#include <sfdo-basedir.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-
-struct sfdo {
-	struct sfdo_desktop_ctx *desktop_ctx;
-	struct sfdo_icon_ctx *icon_ctx;
-	struct sfdo_desktop_db *desktop_db;
-	struct sfdo_icon_theme *icon_theme;
-};
-
-void
-desktop_entry_init(void)
-{
-	struct sfdo *sfdo = znew(*sfdo);
-
-	struct sfdo_basedir_ctx *basedir_ctx = sfdo_basedir_ctx_create();
-	if (!basedir_ctx) {
-		goto err_basedir_ctx;
-	}
-	sfdo->desktop_ctx = sfdo_desktop_ctx_create(basedir_ctx);
-	if (!sfdo->desktop_ctx) {
-		goto err_desktop_ctx;
-	}
-	sfdo->icon_ctx = sfdo_icon_ctx_create(basedir_ctx);
-	if (!sfdo->icon_ctx) {
-		goto err_icon_ctx;
-	}
-
-	/* Discard all libsfdo logging */
-	sfdo_desktop_ctx_set_log_handler(
-		sfdo->desktop_ctx, SFDO_LOG_LEVEL_SILENT, NULL, NULL);
-	sfdo_icon_ctx_set_log_handler(
-		sfdo->icon_ctx, SFDO_LOG_LEVEL_SILENT, NULL, NULL);
-
-	char *locale = NULL;
-#if HAVE_NLS
-	locale = setlocale(LC_ALL, "");
-#endif
-
-	sfdo->desktop_db = sfdo_desktop_db_load(sfdo->desktop_ctx, locale);
-	if (!sfdo->desktop_db) {
-		goto err_desktop_db;
-	}
-
-	/*
-	 * We set some relaxed load options to accommodate delinquent themes in
-	 * the wild, namely:
-	 *
-	 * - SFDO_ICON_THEME_LOAD_OPTION_RELAXED to "impose less restrictions
-	 *   on the format of icon theme files"
-	 *
-	 * - SFDO_ICON_THEME_LOAD_OPTION_ALLOW_MISSING to "continue loading
-	 *   even if it fails to find a theme or one of its dependencies."
-	 */
-	int load_options = SFDO_ICON_THEME_LOAD_OPTIONS_DEFAULT
-		| SFDO_ICON_THEME_LOAD_OPTION_RELAXED
-		| SFDO_ICON_THEME_LOAD_OPTION_ALLOW_MISSING;
-
-	sfdo->icon_theme = sfdo_icon_theme_load(
-		sfdo->icon_ctx,
-		rc.icon_theme_name, load_options);
-	if (!sfdo->icon_theme) {
-		/*
-		 * sfdo_icon_theme_load() falls back to hicolor theme with
-		 * _ALLOW_MISSING flag when the theme is missing, but just
-		 * fails when the theme is invalid.
-		 * So manually call sfdo_icon_theme_load() again here.
-		 */
-
-		sfdo->icon_theme = sfdo_icon_theme_load(
-			sfdo->icon_ctx, "hicolor", load_options);
-	}
-	if (!sfdo->icon_theme) {
-		goto err_icon_theme;
-	}
-
-	/* basedir_ctx is not referenced by other objects */
-	sfdo_basedir_ctx_destroy(basedir_ctx);
-
-	server.sfdo = sfdo;
-	return;
-
-err_icon_theme:
-	sfdo_desktop_db_destroy(sfdo->desktop_db);
-err_desktop_db:
-	sfdo_icon_ctx_destroy(sfdo->icon_ctx);
-err_icon_ctx:
-	sfdo_desktop_ctx_destroy(sfdo->desktop_ctx);
-err_desktop_ctx:
-	sfdo_basedir_ctx_destroy(basedir_ctx);
-err_basedir_ctx:
-	free(sfdo);
-}
-
-void
-desktop_entry_finish(void)
-{
-	struct sfdo *sfdo = server.sfdo;
-	if (!sfdo) {
-		return;
-	}
-
-	sfdo_icon_theme_destroy(sfdo->icon_theme);
-	sfdo_desktop_db_destroy(sfdo->desktop_db);
-	sfdo_icon_ctx_destroy(sfdo->icon_ctx);
-	sfdo_desktop_ctx_destroy(sfdo->desktop_ctx);
-	free(sfdo);
-	server.sfdo = NULL;
-}
-
-struct LABWC_src_desktop_entry_c_icon_ctx {
-	char *path;
-	enum sfdo_icon_file_format format;
-};
-
-/*
- * Return the length of a filename minus any known extension
- */
-static size_t
-LABWC_src_desktop_entry_c_length_without_extension(const char *name)
-{
-	size_t len = strlen(name);
-	if (len >= 4 && name[len - 4] == '.') {
-		const char *ext = &name[len - 3];
-		if (!strcmp(ext, "png") || !strcmp(ext, "svg")
-				|| !strcmp(ext, "xpm")) {
-			len -= 4;
-		}
-	}
-	return len;
-}
-
-/*
- * Return 0 on success and -1 on error
- * The calling function is responsible for free()ing ctx->path
- */
-static int
-LABWC_src_desktop_entry_c_process_rel_name(struct LABWC_src_desktop_entry_c_icon_ctx *ctx, const char *icon_name,
-		struct sfdo *sfdo, int size, int scale)
-{
-	int ret = 0;
-	int lookup_options = SFDO_ICON_THEME_LOOKUP_OPTIONS_DEFAULT;
-#if !HAVE_RSVG
-	lookup_options |= SFDO_ICON_THEME_LOOKUP_OPTION_NO_SVG;
-#endif
-
-	/*
-	 * Relative icon names are not supposed to include an extension,
-	 * but some .desktop files include one anyway. libsfdo does not
-	 * allow this in lookups, so strip the extension first.
-	 */
-	size_t name_len = LABWC_src_desktop_entry_c_length_without_extension(icon_name);
-	struct sfdo_icon_file *icon_file = sfdo_icon_theme_lookup(
-		sfdo->icon_theme, icon_name, name_len, size, scale,
-		lookup_options);
-	if (!icon_file || icon_file == SFDO_ICON_FILE_INVALID) {
-		ret = -1;
-		goto out;
-	}
-	ctx->path = xstrdup(sfdo_icon_file_get_path(icon_file, NULL));
-	ctx->format = sfdo_icon_file_get_format(icon_file);
-out:
-	sfdo_icon_file_destroy(icon_file);
-	return ret;
-}
-
-static int
-LABWC_src_desktop_entry_c_process_abs_name(struct LABWC_src_desktop_entry_c_icon_ctx *ctx, const char *icon_name)
-{
-	ctx->path = xstrdup(icon_name);
-	if (str_endswith_ignore_case(icon_name, ".png")) {
-		ctx->format = SFDO_ICON_FILE_FORMAT_PNG;
-	} else if (str_endswith_ignore_case(icon_name, ".svg")) {
-		ctx->format = SFDO_ICON_FILE_FORMAT_SVG;
-	} else if (str_endswith_ignore_case(icon_name, ".xpm")) {
-		ctx->format = SFDO_ICON_FILE_FORMAT_XPM;
-	} else {
-		goto err;
-	}
-	return 0;
-err:
-	free(ctx->path);
-	return -1;
-}
-
-/*
- * Looks up an application desktop entry using fuzzy matching
- * (e.g. "thunderbird" matches "org.mozilla.Thunderbird.desktop"
- * and "XTerm" matches "xterm.desktop"). This is not per any spec
- * but is needed to find icons for existing applications.
- *
- * The second loop tries to match more partial strings, for
- * example "gimp-2.0" would match "org.something.gimp.desktop".
- */
-static struct sfdo_desktop_entry *
-LABWC_src_desktop_entry_c_get_db_entry_by_id_fuzzy(struct sfdo_desktop_db *db, const char *app_id)
-{
-	size_t n_entries;
-	struct sfdo_desktop_entry **entries = sfdo_desktop_db_get_entries(db, &n_entries);
-
-	/* Would match "org.foobar.xterm" when given app-id "XTerm" */
-	for (size_t i = 0; i < n_entries; i++) {
-		struct sfdo_desktop_entry *entry = entries[i];
-		const char *desktop_id = sfdo_desktop_entry_get_id(entry, NULL);
-		/* Get portion of desktop ID after last '.' */
-		const char *dot = strrchr(desktop_id, '.');
-		const char *desktop_id_base = dot ? (dot + 1) : desktop_id;
-
-		if (!strcasecmp(app_id, desktop_id_base)) {
-			return entry;
-		}
-
-		/* sfdo_desktop_entry_get_startup_wm_class() asserts against APPLICATION */
-		if (sfdo_desktop_entry_get_type(entry) != SFDO_DESKTOP_ENTRY_APPLICATION) {
-			continue;
-		}
-
-		/* Try desktop entry's StartupWMClass also */
-		const char *wm_class =
-			sfdo_desktop_entry_get_startup_wm_class(entry, NULL);
-		if (wm_class && !strcasecmp(app_id, wm_class)) {
-			return entry;
-		}
-	}
-
-	/* Would match "org.foobar.xterm-unicode" when given app-id "XTerm" */
-	const int app_id_len = (int)strlen(app_id);
-	for (size_t i = 0; i < n_entries; i++) {
-		struct sfdo_desktop_entry *entry = entries[i];
-		const char *desktop_id = sfdo_desktop_entry_get_id(entry, NULL);
-		const char *dot = strrchr(desktop_id, '.');
-		const char *desktop_id_base = dot ? (dot + 1) : desktop_id;
-		const int dlen = (int)strlen(desktop_id_base);
-		const int cmp_len = MIN(app_id_len, dlen);
-		if (cmp_len < 3) {
-			/*
-			 * Without this check, app-id "foot" would match
-			 * "something.f" and any app-id would match "R.E.P.O."
-			 */
-			continue;
-		}
-		if (!strncasecmp(app_id, desktop_id_base, (size_t)cmp_len)) {
-			return entry;
-		}
-	}
-
-	return NULL;
-}
-
-static struct sfdo_desktop_entry *
-LABWC_src_desktop_entry_c_get_desktop_entry(struct sfdo *sfdo, const char *app_id)
-{
-	struct sfdo_desktop_entry *entry = sfdo_desktop_db_get_entry_by_id(
-		sfdo->desktop_db, app_id, SFDO_NT);
-	if (entry) {
-		return entry;
-	}
-	entry = LABWC_src_desktop_entry_c_get_db_entry_by_id_fuzzy(sfdo->desktop_db, app_id);
-	if (!entry) {
-	}
-	return entry;
-}
-
-static enum lab_img_type
-LABWC_src_desktop_entry_c_convert_img_type(enum sfdo_icon_file_format fmt)
-{
-	switch (fmt) {
-	case SFDO_ICON_FILE_FORMAT_PNG:
-		return LAB_IMG_PNG;
-	case SFDO_ICON_FILE_FORMAT_SVG:
-		return LAB_IMG_SVG;
-	case SFDO_ICON_FILE_FORMAT_XPM:
-		return LAB_IMG_XPM;
-	default:
-		abort();
-	}
-}
-
-struct lab_img *
-desktop_entry_load_icon(const char *icon_name, int size, float scale)
-{
-	/* static analyzer isn't able to detect the NULL check in string_null_or_empty() */
-	if (string_null_or_empty(icon_name) || !icon_name) {
-		return NULL;
-	}
-
-	struct sfdo *sfdo = server.sfdo;
-	if (!sfdo) {
-		return NULL;
-	}
-
-	/*
-	 * libsfdo doesn't support loading icons for fractional scales,
-	 * so round down and increase the icon size to compensate.
-	 */
-	int lookup_scale = MAX((int)scale, 1);
-	int lookup_size = (int)lroundf((float)size * scale / (float)lookup_scale);
-
-	struct LABWC_src_desktop_entry_c_icon_ctx ctx = {0};
-	int ret;
-	if (icon_name[0] == '/') {
-		ret = LABWC_src_desktop_entry_c_process_abs_name(&ctx, icon_name);
-	} else {
-		ret = LABWC_src_desktop_entry_c_process_rel_name(&ctx, icon_name, sfdo, lookup_size, lookup_scale);
-	}
-	if (ret < 0) {
-		return NULL;
-	}
-
-	struct lab_img *img = lab_img_load(LABWC_src_desktop_entry_c_convert_img_type(ctx.format), ctx.path, NULL);
-
-	free(ctx.path);
-	return img;
-}
-
-struct lab_img *
-desktop_entry_load_icon_from_app_id(const char *app_id, int size, float scale)
-{
-	if (string_null_or_empty(app_id)) {
-		return NULL;
-	}
-
-	struct sfdo *sfdo = server.sfdo;
-	if (!sfdo) {
-		return NULL;
-	}
-
-	const char *icon_name = NULL;
-	struct sfdo_desktop_entry *entry = LABWC_src_desktop_entry_c_get_desktop_entry(sfdo, app_id);
-	if (entry) {
-		icon_name = sfdo_desktop_entry_get_icon(entry, NULL);
-	}
-
-	struct lab_img *img = desktop_entry_load_icon(icon_name, size, scale);
-	if (!img) {
-		/* Icon not defined in .desktop file or could not be loaded */
-		img = desktop_entry_load_icon(app_id, size, scale);
-	}
-	return img;
-}
-
-const char *
-desktop_entry_name_lookup(const char *app_id)
-{
-	if (string_null_or_empty(app_id)) {
-		return NULL;
-	}
-
-	struct sfdo *sfdo = server.sfdo;
-	if (!sfdo) {
-		return NULL;
-	}
-
-	struct sfdo_desktop_entry *entry = LABWC_src_desktop_entry_c_get_desktop_entry(sfdo, app_id);
-	if (!entry) {
-		return NULL;
-	}
-
-	size_t len;
-	const char *name = sfdo_desktop_entry_get_name(entry, &len);
-	if (!len) {
-		return NULL;
-	}
-
-	return name;
 }
 
 
@@ -10182,1473 +9350,6 @@ str_space_only(const char *s)
 	}
 	return true;
 }
-
-
-/* ===== source: src/cycle/cycle.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-
-static bool LABWC_src_cycle_cycle_c_init_cycle(struct cycle_filter filter);
-static void LABWC_src_cycle_cycle_c_update_cycle(void);
-static void LABWC_src_cycle_cycle_c_destroy_cycle(void);
-
-static void
-LABWC_src_cycle_cycle_c_update_preview_outlines(struct view *view)
-{
-	/* Create / Update preview outline tree */
-	struct theme *theme = rc.theme;
-	struct lab_scene_rect *rect = server.cycle.preview_outline;
-	if (!rect) {
-		struct lab_scene_rect_options opts = {
-			.border_colors = (float *[3]) {
-				theme->osd_window_switcher_preview_border_color[0],
-				theme->osd_window_switcher_preview_border_color[1],
-				theme->osd_window_switcher_preview_border_color[2],
-			},
-			.nr_borders = 3,
-			.border_width = theme->osd_window_switcher_preview_border_width,
-		};
-		rect = lab_scene_rect_create(&server.scene->tree, &opts);
-		wlr_scene_node_place_above(&rect->tree->node,
-			&server.cycle_preview_tree->node);
-		server.cycle.preview_outline = rect;
-	}
-
-	struct wlr_box geo = ssd_max_extents(view);
-	lab_scene_rect_set_size(rect, geo.width, geo.height);
-	wlr_scene_node_set_position(&rect->tree->node, geo.x, geo.y);
-}
-
-/* Returns the view to select next in the window switcher. */
-static struct view *
-LABWC_src_cycle_cycle_c_get_next_selected_view(enum lab_cycle_dir dir)
-{
-	struct cycle_state *cycle = &server.cycle;
-	assert(cycle->selected_view);
-	assert(!wl_list_empty(&server.cycle.views));
-
-	struct wl_list *link;
-	if (dir == LAB_CYCLE_DIR_FORWARD) {
-		link = cycle->selected_view->cycle_link.next;
-		if (link == &server.cycle.views) {
-			link = link->next;
-		}
-	} else {
-		link = cycle->selected_view->cycle_link.prev;
-		if (link == &server.cycle.views) {
-			link = link->prev;
-		}
-	}
-	struct view *view = wl_container_of(link, view, cycle_link);
-	return view;
-}
-
-static struct view *
-LABWC_src_cycle_cycle_c_get_first_view(struct wl_list *views)
-{
-	assert(!wl_list_empty(views));
-	struct view *view = wl_container_of(views->next, view, cycle_link);
-	return view;
-}
-
-void
-cycle_reinitialize(void)
-{
-	struct cycle_state *cycle = &server.cycle;
-
-	if (server.input_mode != LAB_INPUT_STATE_CYCLE) {
-		/* OSD not active, no need for clean up */
-		return;
-	}
-
-	struct view *selected_view = cycle->selected_view;
-	struct view *selected_view_prev =
-		LABWC_src_cycle_cycle_c_get_next_selected_view(LAB_CYCLE_DIR_BACKWARD);
-	struct cycle_filter filter = cycle->filter;
-
-	LABWC_src_cycle_cycle_c_destroy_cycle();
-	if (LABWC_src_cycle_cycle_c_init_cycle(filter)) {
-		/*
-		 * Preserve the selected view (or its previous view) if it's
-		 * still in the cycle list
-		 */
-		if (selected_view->cycle_link.next) {
-			cycle->selected_view = selected_view;
-		} else if (selected_view_prev->cycle_link.next) {
-			cycle->selected_view = selected_view_prev;
-		} else {
-			/* should be unreachable */
-			cycle->selected_view = LABWC_src_cycle_cycle_c_get_first_view(&server.cycle.views);
-		}
-		LABWC_src_cycle_cycle_c_update_cycle();
-	} else {
-		/* Failed to re-init window switcher, exit */
-		cycle_finish(/*switch_focus*/ false);
-	}
-}
-
-void
-cycle_on_cursor_release(struct wlr_scene_node *node)
-{
-	assert(server.input_mode == LAB_INPUT_STATE_CYCLE);
-
-	struct cycle_osd_item *item = node_cycle_osd_item_from_node(node);
-	server.cycle.selected_view = item->view;
-	cycle_finish(/*switch_focus*/ true);
-}
-
-static void
-LABWC_src_cycle_cycle_c_restore_preview_node(void)
-{
-	if (server.cycle.preview_node) {
-		wlr_scene_node_reparent(server.cycle.preview_node,
-			server.cycle.preview_dummy->parent);
-		wlr_scene_node_place_above(server.cycle.preview_node,
-			server.cycle.preview_dummy);
-		wlr_scene_node_destroy(server.cycle.preview_dummy);
-
-		/* Node was disabled / minimized before, disable again */
-		if (!server.cycle.preview_was_enabled) {
-			wlr_scene_node_set_enabled(server.cycle.preview_node, false);
-		}
-		if (server.cycle.preview_was_shaded) {
-			struct view *view = node_view_from_node(server.cycle.preview_node);
-			view_set_shade(view, true);
-		}
-		server.cycle.preview_node = NULL;
-		server.cycle.preview_dummy = NULL;
-		server.cycle.preview_was_enabled = false;
-		server.cycle.preview_was_shaded = false;
-	}
-}
-
-void
-cycle_begin(enum lab_cycle_dir direction,
-		struct cycle_filter filter)
-{
-	if (server.input_mode != LAB_INPUT_STATE_PASSTHROUGH) {
-		return;
-	}
-
-	if (!LABWC_src_cycle_cycle_c_init_cycle(filter)) {
-		return;
-	}
-
-	struct view *active_view = server.active_view;
-	if (active_view && active_view->cycle_link.next) {
-		/* Select the active view if it's in the cycle list */
-		server.cycle.selected_view = active_view;
-	} else {
-		/* Otherwise, select the first view in the cycle list */
-		server.cycle.selected_view = LABWC_src_cycle_cycle_c_get_first_view(&server.cycle.views);
-	}
-	/* Pre-select the next view in the given direction */
-	server.cycle.selected_view = LABWC_src_cycle_cycle_c_get_next_selected_view(direction);
-
-	seat_focus_override_begin(&server.seat,
-		LAB_INPUT_STATE_CYCLE, LAB_CURSOR_DEFAULT);
-	LABWC_src_cycle_cycle_c_update_cycle();
-
-	/* Update cursor, in case it is within the area covered by OSD */
-	cursor_update_focus();
-}
-
-void
-cycle_step(enum lab_cycle_dir direction)
-{
-	assert(server.input_mode == LAB_INPUT_STATE_CYCLE);
-
-	server.cycle.selected_view = LABWC_src_cycle_cycle_c_get_next_selected_view(direction);
-	LABWC_src_cycle_cycle_c_update_cycle();
-}
-
-void
-cycle_finish(bool switch_focus)
-{
-	if (server.input_mode != LAB_INPUT_STATE_CYCLE) {
-		return;
-	}
-
-	struct view *selected_view = server.cycle.selected_view;
-	LABWC_src_cycle_cycle_c_destroy_cycle();
-
-	seat_focus_override_end(&server.seat, /*restore_focus*/ !switch_focus);
-
-	/* Hiding OSD may need a cursor change */
-	cursor_update_focus();
-
-	if (switch_focus && selected_view) {
-		if (rc.window_switcher.unshade) {
-			view_set_shade(selected_view, false);
-		}
-		desktop_focus_view(selected_view, /*raise*/ true);
-	}
-}
-
-static void
-LABWC_src_cycle_cycle_c_preview_selected_view(struct view *view)
-{
-	assert(view);
-	assert(view->scene_tree);
-	struct cycle_state *cycle = &server.cycle;
-
-	/* Move previous selected node back to its original place */
-	LABWC_src_cycle_cycle_c_restore_preview_node();
-
-	cycle->preview_node = &view->scene_tree->node;
-
-	/* Create a dummy node at the original place of the previewed window */
-	struct wlr_scene_rect *dummy_rect = lab_wlr_scene_rect_create(
-		cycle->preview_node->parent, 0, 0, (float [4]) {0});
-	wlr_scene_node_place_below(&dummy_rect->node, cycle->preview_node);
-	wlr_scene_node_set_enabled(&dummy_rect->node, false);
-	cycle->preview_dummy = &dummy_rect->node;
-
-	/* Store node enabled / minimized state and force-enable if disabled */
-	cycle->preview_was_enabled = cycle->preview_node->enabled;
-	wlr_scene_node_set_enabled(cycle->preview_node, true);
-	if (rc.window_switcher.unshade && view->shaded) {
-		view_set_shade(view, false);
-		cycle->preview_was_shaded = true;
-	}
-
-	wlr_scene_node_reparent(cycle->preview_node,
-		server.cycle_preview_tree);
-
-	/* Finally raise selected node to the top */
-	wlr_scene_node_raise_to_top(cycle->preview_node);
-}
-
-static struct cycle_osd_impl *
-LABWC_src_cycle_cycle_c_get_osd_impl(void)
-{
-	switch (rc.window_switcher.osd.style) {
-	case CYCLE_OSD_STYLE_CLASSIC:
-		return &cycle_osd_classic_impl;
-	case CYCLE_OSD_STYLE_THUMBNAIL:
-		return &cycle_osd_thumbnail_impl;
-	}
-	return NULL;
-}
-
-static uint64_t
-LABWC_src_cycle_cycle_c_get_outputs_by_filter(enum cycle_output_filter output_filter)
-{
-	struct output *output = NULL;
-
-	switch (output_filter) {
-	case CYCLE_OUTPUT_ALL:
-		break;
-	case CYCLE_OUTPUT_CURSOR:
-		output = output_nearest_to_cursor();
-		break;
-	case CYCLE_OUTPUT_FOCUSED: {
-		struct view *view = server.active_view;
-		if (view && output_is_usable(view->output)) {
-			output = view->output;
-		} else {
-			/* Fallback to pointer */
-			output = output_nearest_to_cursor();
-		}
-		break;
-	}
-	}
-
-	if (output) {
-		return output->id_bit;
-	} else {
-		/* bitmask for all outputs */
-		return UINT64_MAX;
-	}
-}
-
-static void
-LABWC_src_cycle_cycle_c_insert_view_ordered_by_age(struct wl_list *views, struct view *new_view)
-{
-	struct wl_list *link = views;
-	struct view *view;
-	wl_list_for_each(view, views, cycle_link) {
-		if (view->creation_id >= new_view->creation_id) {
-			break;
-		}
-		link = &view->cycle_link;
-	}
-	wl_list_insert(link, &new_view->cycle_link);
-}
-
-static void
-LABWC_src_cycle_cycle_c_handle_osd_tree_destroy(struct wl_listener *listener, void *data)
-{
-	struct cycle_osd_output *osd_output =
-		wl_container_of(listener, osd_output, tree_destroy);
-	struct cycle_osd_item *item, *tmp;
-	wl_list_for_each_safe(item, tmp, &osd_output->items, link) {
-		wl_list_remove(&item->link);
-		free(item);
-	}
-	wl_list_remove(&osd_output->tree_destroy.link);
-	wl_list_remove(&osd_output->link);
-	free(osd_output);
-}
-
-static enum lab_view_criteria
-LABWC_src_cycle_cycle_c_get_view_criteria(struct cycle_filter *filter)
-{
-	enum lab_view_criteria criteria =
-		LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
-		| LAB_VIEW_CRITERIA_NO_DIALOG;
-	if (filter->workspace == CYCLE_WORKSPACE_CURRENT) {
-		criteria |= LAB_VIEW_CRITERIA_CURRENT_WORKSPACE;
-	}
-	return criteria;
-}
-
-static const char *
-LABWC_src_cycle_cycle_c_get_cycle_app_id(struct cycle_filter *filter)
-{
-	if (filter->app_id == CYCLE_APP_ID_CURRENT && server.active_view) {
-		return server.active_view->app_id;
-	}
-	return NULL;
-}
-
-static struct wl_list *LABWC_src_cycle_cycle_c_prev(struct wl_list *elm) { return elm->prev; }
-static struct wl_list *LABWC_src_cycle_cycle_c_next(struct wl_list *elm) { return elm->next; }
-
-void
-cycle_immediate(enum lab_cycle_dir direction, struct cycle_filter filter)
-{
-	if (wl_list_empty(&server.views)) {
-		return;
-	}
-
-	enum lab_view_criteria criteria = LABWC_src_cycle_cycle_c_get_view_criteria(&filter);
-	uint64_t cycle_outputs = LABWC_src_cycle_cycle_c_get_outputs_by_filter(filter.output);
-	const char *cycle_app_id = LABWC_src_cycle_cycle_c_get_cycle_app_id(&filter);
-
-	struct wl_list *head = &server.views;
-	struct wl_list *(*iter)(struct wl_list *list);
-	iter = direction == LAB_CYCLE_DIR_FORWARD ? LABWC_src_cycle_cycle_c_next : LABWC_src_cycle_cycle_c_prev;
-
-	struct wl_list *from = (direction == LAB_CYCLE_DIR_FORWARD) && server.active_view
-		? &server.active_view->link : head;
-
-	for (struct wl_list *elm = iter(from); elm != head; elm = iter(elm)) {
-		struct view *view = wl_container_of(elm, view, link);
-		if (!view_matches_criteria(view, criteria)) {
-			continue;
-		}
-		if (filter.output != CYCLE_OUTPUT_ALL) {
-			if (!view->output || !(cycle_outputs & view->output->id_bit)) {
-				continue;
-			}
-		}
-		if (cycle_app_id && strcmp(view->app_id, cycle_app_id) != 0) {
-			continue;
-		}
-		if (server.active_view && direction == LAB_CYCLE_DIR_FORWARD) {
-			/*
-			 * When cycling forward, the current active view needs to be
-			 * sent to back to keep the same sequence and avoid getting
-			 * stuck in the 2 topmost views.
-			 */
-			view_move_to_back(server.active_view);
-		}
-		desktop_focus_view(view, true);
-		break;
-	}
-	cursor_update_focus();
-}
-
-/* Return false on failure */
-static bool
-LABWC_src_cycle_cycle_c_init_cycle(struct cycle_filter filter)
-{
-	enum lab_view_criteria criteria = LABWC_src_cycle_cycle_c_get_view_criteria(&filter);
-	uint64_t cycle_outputs = LABWC_src_cycle_cycle_c_get_outputs_by_filter(filter.output);
-	const char *cycle_app_id = LABWC_src_cycle_cycle_c_get_cycle_app_id(&filter);
-
-	struct view *view;
-	for_each_view(view, &server.views, criteria) {
-		if (filter.output != CYCLE_OUTPUT_ALL) {
-			if (!view->output || !(cycle_outputs & view->output->id_bit)) {
-				continue;
-			}
-		}
-		if (cycle_app_id && strcmp(view->app_id, cycle_app_id) != 0) {
-			continue;
-		}
-
-		if (rc.window_switcher.order == WINDOW_SWITCHER_ORDER_AGE) {
-			LABWC_src_cycle_cycle_c_insert_view_ordered_by_age(&server.cycle.views, view);
-		} else {
-			wl_list_append(&server.cycle.views, &view->cycle_link);
-		}
-	}
-	if (wl_list_empty(&server.cycle.views)) {
-		return false;
-	}
-	server.cycle.filter = filter;
-
-	if (rc.window_switcher.osd.show) {
-		/* Create OSD */
-		uint64_t osd_outputs = LABWC_src_cycle_cycle_c_get_outputs_by_filter(rc.window_switcher.osd.output_filter);
-		struct output *output;
-		wl_list_for_each(output, &server.outputs, link) {
-			if (!(osd_outputs & output->id_bit)) {
-				continue;
-			}
-			if (!output_is_usable(output)) {
-				continue;
-			}
-
-			struct cycle_osd_output *osd_output = znew(*osd_output);
-			wl_list_append(&server.cycle.osd_outputs, &osd_output->link);
-			osd_output->output = output;
-			wl_list_init(&osd_output->items);
-
-			LABWC_src_cycle_cycle_c_get_osd_impl()->init(osd_output);
-
-			osd_output->tree_destroy.notify = LABWC_src_cycle_cycle_c_handle_osd_tree_destroy;
-			wl_signal_add(&osd_output->tree->node.events.destroy,
-				&osd_output->tree_destroy);
-		}
-	}
-
-	return true;
-}
-
-static void
-LABWC_src_cycle_cycle_c_update_cycle(void)
-{
-	struct cycle_state *cycle = &server.cycle;
-
-	if (rc.window_switcher.osd.show) {
-		struct cycle_osd_output *osd_output;
-		wl_list_for_each(osd_output, &cycle->osd_outputs, link) {
-			LABWC_src_cycle_cycle_c_get_osd_impl()->update(osd_output);
-		}
-	}
-
-	if (rc.window_switcher.preview) {
-		LABWC_src_cycle_cycle_c_preview_selected_view(cycle->selected_view);
-	}
-
-	/* Outline current window */
-	if (rc.window_switcher.outlines) {
-		if (view_is_focusable(cycle->selected_view)) {
-			LABWC_src_cycle_cycle_c_update_preview_outlines(cycle->selected_view);
-		}
-	}
-}
-
-/* Resets all the states in server.cycle */
-static void
-LABWC_src_cycle_cycle_c_destroy_cycle(void)
-{
-	struct cycle_osd_output *osd_output, *tmp;
-	wl_list_for_each_safe(osd_output, tmp, &server.cycle.osd_outputs, link) {
-		/* calls handle_osd_tree_destroy() */
-		wlr_scene_node_destroy(&osd_output->tree->node);
-	}
-
-	LABWC_src_cycle_cycle_c_restore_preview_node();
-
-	if (server.cycle.preview_outline) {
-		wlr_scene_node_destroy(&server.cycle.preview_outline->tree->node);
-	}
-
-	struct view *view, *tmp2;
-	wl_list_for_each_safe(view, tmp2, &server.cycle.views, cycle_link) {
-		wl_list_remove(&view->cycle_link);
-		view->cycle_link = (struct wl_list){0};
-	}
-
-	server.cycle = (struct cycle_state){0};
-	wl_list_init(&server.cycle.views);
-	wl_list_init(&server.cycle.osd_outputs);
-}
-
-
-/* ===== source: src/cycle/osd-classic.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-
-struct LABWC_src_cycle_osd_classic_c_cycle_osd_classic_item {
-	struct cycle_osd_item base;
-	struct wlr_scene_tree *normal_tree, *active_tree;
-};
-
-static void
-LABWC_src_cycle_osd_classic_c_create_fields_scene(struct view *view,
-		struct wlr_scene_tree *parent, const float *text_color,
-		const float *bg_color, int field_widths_sum, int x, int y)
-{
-	struct theme *theme = rc.theme;
-	struct window_switcher_classic_theme *switcher_theme =
-		&theme->osd_window_switcher_classic;
-
-	struct cycle_osd_field *field;
-	wl_list_for_each(field, &rc.window_switcher.osd.fields, link) {
-		int field_width = (int)(field_widths_sum * field->width / 100.0);
-		struct wlr_scene_node *node = NULL;
-		int height = -1;
-
-		if (field->content == LAB_FIELD_ICON) {
-			int icon_size = MIN(field_width,
-				switcher_theme->item_icon_size);
-			struct scaled_icon_buffer *icon_buffer =
-				scaled_icon_buffer_create(parent, icon_size, icon_size);
-			scaled_icon_buffer_set_view(icon_buffer, view);
-			node = &icon_buffer->scene_buffer->node;
-			height = icon_size;
-		} else {
-			struct buf buf = BUF_INIT;
-			cycle_osd_field_get_content(field, &buf, view);
-
-			if (!string_null_or_empty(buf.data)) {
-				struct scaled_font_buffer *font_buffer =
-					scaled_font_buffer_create(parent);
-				scaled_font_buffer_update(font_buffer,
-					buf.data, field_width,
-					&rc.font_osd, text_color, bg_color);
-				node = &font_buffer->scene_buffer->node;
-				height = font_height(&rc.font_osd);
-			}
-
-			buf_reset(&buf);
-		}
-
-		if (node) {
-			int item_height = switcher_theme->item_height;
-			wlr_scene_node_set_position(node,
-				x, y + (item_height - height) / 2);
-		}
-		x += field_width + switcher_theme->item_padding_x;
-	}
-}
-
-static void
-LABWC_src_cycle_osd_classic_c_cycle_osd_classic_init(struct cycle_osd_output *osd_output)
-{
-	struct output *output = osd_output->output;
-	struct theme *theme = rc.theme;
-	struct window_switcher_classic_theme *switcher_theme =
-		&theme->osd_window_switcher_classic;
-	int padding = theme->osd_border_width + switcher_theme->padding;
-	bool show_workspace = wl_list_length(&rc.workspace_config.workspaces) > 1;
-	const char *workspace_name = server.workspaces.current->name;
-	int nr_views = wl_list_length(&server.cycle.views);
-
-	struct wlr_box output_box;
-	wlr_output_layout_get_box(server.output_layout, output->wlr_output,
-		&output_box);
-
-	int w = switcher_theme->width;
-	if (switcher_theme->width_is_percent) {
-		w = output_box.width * switcher_theme->width / 100;
-	}
-	int workspace_name_h = 0;
-	if (show_workspace) {
-		/* workspace indicator */
-		workspace_name_h = switcher_theme->item_height;
-	}
-	int nr_visible_views = (output_box.height - workspace_name_h - 2 * padding)
-				/ switcher_theme->item_height;
-	nr_visible_views = MIN(nr_visible_views, nr_views);
-	int h = workspace_name_h + nr_visible_views * switcher_theme->item_height
-		+ 2 * padding;
-
-	osd_output->tree = lab_wlr_scene_tree_create(output->cycle_osd_tree);
-
-	float *text_color = theme->osd_label_text_color;
-	float *bg_color = theme->osd_bg_color;
-
-	/* Draw background */
-	struct lab_scene_rect_options bg_opts = {
-		.border_colors = (float *[1]) {theme->osd_border_color},
-		.nr_borders = 1,
-		.border_width = theme->osd_border_width,
-		.bg_color = bg_color,
-		.width = w,
-		.height = h,
-	};
-	lab_scene_rect_create(osd_output->tree, &bg_opts);
-
-	int y = padding;
-
-	/* Draw workspace indicator */
-	if (show_workspace) {
-		struct font font = rc.font_osd;
-		font.weight = PANGO_WEIGHT_BOLD;
-
-		/* Center workspace indicator on the x axis */
-		int x = (w - font_width(&font, workspace_name)) / 2;
-		if (x < 0) {
-			goto error;
-		}
-
-		struct scaled_font_buffer *font_buffer =
-			scaled_font_buffer_create(osd_output->tree);
-		wlr_scene_node_set_position(&font_buffer->scene_buffer->node,
-			x, y + (switcher_theme->item_height - font_height(&font)) / 2);
-		scaled_font_buffer_update(font_buffer, workspace_name, 0,
-			&font, text_color, bg_color);
-		y += switcher_theme->item_height;
-	}
-
-	int nr_fields = wl_list_length(&rc.window_switcher.osd.fields);
-
-	/* This is the width of the area available for text fields */
-	int field_widths_sum = w - 2 * padding
-		- 2 * switcher_theme->item_active_border_width
-		- (nr_fields + 1) * switcher_theme->item_padding_x;
-	if (field_widths_sum <= 0) {
-		goto error;
-	}
-
-	float *active_bg_color = switcher_theme->item_active_bg_color;
-	float *active_border_color = switcher_theme->item_active_border_color;
-	osd_output->items_tree = lab_wlr_scene_tree_create(osd_output->tree);
-
-	/* Draw text for each node */
-	struct view *view;
-	wl_list_for_each(view, &server.cycle.views, cycle_link) {
-		struct LABWC_src_cycle_osd_classic_c_cycle_osd_classic_item *item = znew(*item);
-		wl_list_append(&osd_output->items, &item->base.link);
-		item->base.view = view;
-		item->base.tree = lab_wlr_scene_tree_create(osd_output->items_tree);
-		node_descriptor_create(&item->base.tree->node,
-			LAB_NODE_CYCLE_OSD_ITEM, NULL, item);
-		/*
-		 *    OSD border
-		 * +---------------------------------+
-		 * |                                 |
-		 * |  item border                    |
-		 * |+-------------------------------+|
-		 * ||                               ||
-		 * ||padding between each field     ||
-		 * ||| field-1 | field-2 | field-n |||
-		 * ||                               ||
-		 * ||                               ||
-		 * |+-------------------------------+|
-		 * |                                 |
-		 * |                                 |
-		 * +---------------------------------+
-		 */
-		int x = padding
-			+ switcher_theme->item_active_border_width
-			+ switcher_theme->item_padding_x;
-		item->normal_tree = lab_wlr_scene_tree_create(item->base.tree);
-		item->active_tree = lab_wlr_scene_tree_create(item->base.tree);
-		wlr_scene_node_set_enabled(&item->active_tree->node, false);
-
-		/* Highlight around selected window's item */
-		struct lab_scene_rect_options highlight_opts = {
-			.border_colors = (float *[1]) {active_border_color},
-			.nr_borders = 1,
-			.border_width = switcher_theme->item_active_border_width,
-			.bg_color = active_bg_color,
-			.width = w - 2 * padding,
-			.height = switcher_theme->item_height,
-		};
-		struct lab_scene_rect *highlight_rect = lab_scene_rect_create(
-			item->active_tree, &highlight_opts);
-		wlr_scene_node_set_position(&highlight_rect->tree->node, padding, y);
-
-		/* hitbox for mouse clicks */
-		struct wlr_scene_rect *hitbox = lab_wlr_scene_rect_create(item->base.tree,
-			w - 2 * padding, switcher_theme->item_height, (float[4]) {0});
-		wlr_scene_node_set_position(&hitbox->node, padding, y);
-
-		LABWC_src_cycle_osd_classic_c_create_fields_scene(view, item->normal_tree,
-			text_color, bg_color, field_widths_sum, x, y);
-		LABWC_src_cycle_osd_classic_c_create_fields_scene(view, item->active_tree,
-			text_color, active_bg_color, field_widths_sum, x, y);
-
-		y += switcher_theme->item_height;
-	}
-
-	struct wlr_box scrollbar_area = {
-		.x = w - padding - SCROLLBAR_W,
-		.y = padding,
-		.width = SCROLLBAR_W,
-		.height = h - 2 * padding,
-	};
-	cycle_osd_scroll_init(osd_output, scrollbar_area,
-		switcher_theme->item_height,
-		/*nr_cols*/ 1, /*nr_rows*/ nr_views, nr_visible_views,
-		active_border_color, active_bg_color);
-
-error:;
-	/* Center OSD */
-	wlr_scene_node_set_position(&osd_output->tree->node,
-		output_box.x + (output_box.width - w) / 2,
-		output_box.y + (output_box.height - h) / 2);
-}
-
-static void
-LABWC_src_cycle_osd_classic_c_cycle_osd_classic_update(struct cycle_osd_output *osd_output)
-{
-	cycle_osd_scroll_update(osd_output);
-
-	struct LABWC_src_cycle_osd_classic_c_cycle_osd_classic_item *item;
-	wl_list_for_each(item, &osd_output->items, base.link) {
-		bool active = item->base.view == server.cycle.selected_view;
-		wlr_scene_node_set_enabled(&item->normal_tree->node, !active);
-		wlr_scene_node_set_enabled(&item->active_tree->node, active);
-	}
-}
-
-struct cycle_osd_impl cycle_osd_classic_impl = {
-	.init = LABWC_src_cycle_osd_classic_c_cycle_osd_classic_init,
-	.update = LABWC_src_cycle_osd_classic_c_cycle_osd_classic_update,
-};
-
-
-/* ===== source: src/cycle/osd-field.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-#include <ctype.h>
-
-/* includes '%', terminating 's' and NULL byte, 8 is enough for %-9999s */
-#define LAB_FIELD_SINGLE_FMT_MAX_LEN 8
-static_assert(LAB_FIELD_SINGLE_FMT_MAX_LEN <= 255, "fmt_position is a unsigned char");
-
-/* forward declares */
-typedef void field_conversion_type(struct buf *buf, struct view *view, const char *format);
-struct LABWC_src_cycle_osd_field_c_field_converter {
-	const char fmt_char;
-	field_conversion_type *fn;
-};
-
-/* Internal helpers */
-
-static const char *
-LABWC_src_cycle_osd_field_c_get_identifier(struct view *view, bool trim)
-{
-	const char *identifier = view->app_id;
-
-	/* remove the first two nodes of 'org.' strings */
-	if (trim && identifier && !strncmp(identifier, "org.", 4)) {
-		const char *p = identifier + 4;
-		p = strchr(p, '.');
-		if (p) {
-			return ++p;
-		}
-	}
-	return identifier;
-}
-
-static const char *
-LABWC_src_cycle_osd_field_c_get_desktop_name(struct view *view)
-{
-#if HAVE_LIBSFDO
-	const char *name = desktop_entry_name_lookup(view->app_id);
-	if (name) {
-		return name;
-	}
-#endif
-
-	return LABWC_src_cycle_osd_field_c_get_identifier(view, /* trim */ true);
-}
-
-static const char *
-LABWC_src_cycle_osd_field_c_get_type(struct view *view, bool short_form)
-{
-	switch (view->type) {
-	case LAB_XDG_SHELL_VIEW:
-		return short_form ? "[W]" : "[xdg-shell]";
-#if HAVE_XWAYLAND
-	case LAB_XWAYLAND_VIEW:
-		return short_form ? "[X]" : "[xwayland]";
-#endif
-	}
-	return "???";
-}
-
-static const char *
-LABWC_src_cycle_osd_field_c_get_title_if_different(struct view *view)
-{
-	const char *identifier = LABWC_src_cycle_osd_field_c_get_identifier(view, /*trim*/ false);
-	const char *title = view->title;
-	return !strcmp(identifier, title) ? NULL : title;
-}
-
-/* Field handlers */
-static void
-LABWC_src_cycle_osd_field_c_field_set_type(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: B (backend) */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_type(view, /*short_form*/ false));
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_type_short(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: b (backend) */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_type(view, /*short_form*/ true));
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_workspace(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: W */
-	buf_add(buf, view->workspace->name);
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_workspace_short(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: w */
-	if (wl_list_length(&rc.workspace_config.workspaces) > 1) {
-		buf_add(buf, view->workspace->name);
-	}
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_win_state(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: s */
-	if (view->minimized) {
-		buf_add(buf, "m");
-	} else if (view->shaded) {
-		buf_add(buf, "s");
-	} else if (view->maximized) {
-		buf_add(buf, "M");
-	} else if (view->fullscreen) {
-		buf_add(buf, "F");
-	} else {
-		buf_add(buf, " ");
-	}
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_win_state_all(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: S */
-	buf_add(buf, view->minimized ? "m" : " ");
-	buf_add(buf, view->shaded ? "s" : " ");
-	buf_add(buf, view->maximized ? "M" : " ");
-	buf_add(buf, view->fullscreen ? "F" : " ");
-	/* TODO: add always-on-top and omnipresent ? */
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_output(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: O */
-	if (output_is_usable(view->output)) {
-		buf_add(buf, view->output->wlr_output->name);
-	}
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_output_short(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: o */
-	if (wl_list_length(&server.outputs) > 1 &&
-			output_is_usable(view->output)) {
-		buf_add(buf, view->output->wlr_output->name);
-	}
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_identifier(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: I */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_identifier(view, /*trim*/ false));
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_identifier_trimmed(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: i */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_identifier(view, /*trim*/ true));
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_desktop_entry_name(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: n */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_desktop_name(view));
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_title(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: T */
-	buf_add(buf, view->title);
-}
-
-static void
-LABWC_src_cycle_osd_field_c_field_set_title_short(struct buf *buf, struct view *view, const char *format)
-{
-	/* custom type conversion-specifier: t */
-	buf_add(buf, LABWC_src_cycle_osd_field_c_get_title_if_different(view));
-}
-
-static const struct LABWC_src_cycle_osd_field_c_field_converter LABWC_src_cycle_osd_field_c_field_converter[LAB_FIELD_COUNT] = {
-	[LAB_FIELD_TYPE]               = { 'B', LABWC_src_cycle_osd_field_c_field_set_type },
-	[LAB_FIELD_TYPE_SHORT]         = { 'b', LABWC_src_cycle_osd_field_c_field_set_type_short },
-	[LAB_FIELD_WIN_STATE_ALL]      = { 'S', LABWC_src_cycle_osd_field_c_field_set_win_state_all },
-	[LAB_FIELD_WIN_STATE]          = { 's', LABWC_src_cycle_osd_field_c_field_set_win_state },
-	[LAB_FIELD_IDENTIFIER]         = { 'I', LABWC_src_cycle_osd_field_c_field_set_identifier },
-	[LAB_FIELD_TRIMMED_IDENTIFIER] = { 'i', LABWC_src_cycle_osd_field_c_field_set_identifier_trimmed },
-	[LAB_FIELD_DESKTOP_ENTRY_NAME] = { 'n', LABWC_src_cycle_osd_field_c_field_set_desktop_entry_name},
-	[LAB_FIELD_WORKSPACE]          = { 'W', LABWC_src_cycle_osd_field_c_field_set_workspace },
-	[LAB_FIELD_WORKSPACE_SHORT]    = { 'w', LABWC_src_cycle_osd_field_c_field_set_workspace_short },
-	[LAB_FIELD_OUTPUT]             = { 'O', LABWC_src_cycle_osd_field_c_field_set_output },
-	[LAB_FIELD_OUTPUT_SHORT]       = { 'o', LABWC_src_cycle_osd_field_c_field_set_output_short },
-	[LAB_FIELD_TITLE]              = { 'T', LABWC_src_cycle_osd_field_c_field_set_title },
-	[LAB_FIELD_TITLE_SHORT]        = { 't', LABWC_src_cycle_osd_field_c_field_set_title_short },
-	/* fmt_char can never be matched so prevents LAB_FIELD_CUSTOM recursion */
-	[LAB_FIELD_CUSTOM]             = { '\0', cycle_osd_field_set_custom },
-};
-
-void
-cycle_osd_field_set_custom(struct buf *buf, struct view *view, const char *format)
-{
-	if (!format) {
-		return;
-	}
-
-	char fmt[LAB_FIELD_SINGLE_FMT_MAX_LEN];
-	unsigned char fmt_position = 0;
-
-	struct buf field_result = BUF_INIT;
-	char converted_field[4096];
-
-	for (const char *p = format; *p; p++) {
-		if (!fmt_position) {
-			if (*p == '%') {
-				fmt[fmt_position++] = *p;
-			} else {
-				/*
-				 * Just relay anything not part of a
-				 * format string to the output buffer.
-				 */
-				buf_add_char(buf, *p);
-			}
-			continue;
-		}
-
-		/* Allow string formatting */
-		/* TODO: add . for manual truncating? */
-		/*
-		 * Remove the || *p == '#' section as not used/needed
-		 * change (*p >= '0' && *p <= '9') to isdigit(*p)
-		 * changes by droc12345
-		 */
-		if (*p == '-' || isdigit(*p)) {
-			if (fmt_position >= LAB_FIELD_SINGLE_FMT_MAX_LEN - 2) {
-				/* Leave space for terminating 's' and NULL byte */
-			} else {
-				fmt[fmt_position++] = *p;
-			}
-			continue;
-		}
-
-		/* Handlers */
-		for (unsigned char i = 0; i < LAB_FIELD_COUNT; i++) {
-			if (*p != LABWC_src_cycle_osd_field_c_field_converter[i].fmt_char) {
-				continue;
-			}
-
-			/* Generate the actual content*/
-			LABWC_src_cycle_osd_field_c_field_converter[i].fn(&field_result, view, /*format*/ NULL);
-
-			/* Throw it at snprintf to allow formatting / padding */
-			fmt[fmt_position++] = 's';
-			fmt[fmt_position++] = '\0';
-			snprintf(converted_field, sizeof(converted_field),
-				fmt, field_result.data);
-
-			/* And finally write it to the output buffer */
-			buf_add(buf, converted_field);
-			goto reset_format;
-		}
-
-
-reset_format:
-		/* Reset format string and tmp field result buffer */
-		buf_clear(&field_result);
-		fmt_position = 0;
-	}
-	buf_reset(&field_result);
-}
-
-void
-cycle_osd_field_arg_from_xml_node(struct cycle_osd_field *field,
-		const char *nodename, const char *content)
-{
-	if (!strcmp(nodename, "content")) {
-		if (!strcmp(content, "type")) {
-			field->content = LAB_FIELD_TYPE;
-		} else if (!strcmp(content, "type_short")) {
-			field->content = LAB_FIELD_TYPE_SHORT;
-		} else if (!strcmp(content, "app_id")) {
-			field->content = LAB_FIELD_IDENTIFIER;
-		} else if (!strcmp(content, "identifier")) {
-			field->content = LAB_FIELD_IDENTIFIER;
-		} else if (!strcmp(content, "trimmed_identifier")) {
-			field->content = LAB_FIELD_TRIMMED_IDENTIFIER;
-		} else if (!strcmp(content, "icon")) {
-			field->content = LAB_FIELD_ICON;
-		} else if (!strcmp(content, "desktop_entry_name")) {
-			field->content = LAB_FIELD_DESKTOP_ENTRY_NAME;
-		} else if (!strcmp(content, "title")) {
-			field->content = LAB_FIELD_TITLE;
-		} else if (!strcmp(content, "workspace")) {
-			field->content = LAB_FIELD_WORKSPACE;
-		} else if (!strcmp(content, "state")) {
-			field->content = LAB_FIELD_WIN_STATE;
-		} else if (!strcmp(content, "output")) {
-			field->content = LAB_FIELD_OUTPUT;
-		} else if (!strcmp(content, "custom")) {
-			field->content = LAB_FIELD_CUSTOM;
-		} else {
-		}
-	} else if (!strcmp(nodename, "format")) {
-		zfree(field->format);
-		field->format = xstrdup(content);
-	} else if (!strcmp(nodename, "width") && !strchr(content, '%')) {
-	} else if (!strcmp(nodename, "width")) {
-		field->width = atoi(content);
-	} else {
-	}
-}
-
-bool
-cycle_osd_field_is_valid(struct cycle_osd_field *field)
-{
-	if (field->content == LAB_FIELD_NONE) {
-		return false;
-	}
-	if (field->content == LAB_FIELD_CUSTOM && !field->format) {
-		return false;
-	}
-	if (!field->width) {
-		return false;
-	}
-	return true;
-}
-
-void
-cycle_osd_field_get_content(struct cycle_osd_field *field,
-		struct buf *buf, struct view *view)
-{
-	if (field->content == LAB_FIELD_NONE) {
-		return;
-	}
-	assert(field->content < LAB_FIELD_COUNT && LABWC_src_cycle_osd_field_c_field_converter[field->content].fn);
-
-	LABWC_src_cycle_osd_field_c_field_converter[field->content].fn(buf, view, field->format);
-}
-
-void
-cycle_osd_field_free(struct cycle_osd_field *field)
-{
-	zfree(field->format);
-	zfree(field);
-}
-#undef LAB_FIELD_SINGLE_FMT_MAX_LEN
-
-
-/* ===== source: src/cycle/osd-scroll.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-
-void
-cycle_osd_scroll_init(struct cycle_osd_output *osd_output, struct wlr_box bar_area,
-		int delta_y, int nr_cols, int nr_rows, int nr_visible_rows,
-		float *border_color, float *bg_color)
-{
-	if (nr_visible_rows >= nr_rows) {
-		/* OSD doesn't have so many windows to scroll through */
-		return;
-	}
-
-	struct cycle_osd_scroll_context *scroll = &osd_output->scroll;
-	scroll->nr_cols = nr_cols;
-	scroll->nr_rows = nr_rows;
-	scroll->nr_visible_rows = nr_visible_rows;
-	scroll->top_row_idx = 0;
-	scroll->bar_area = bar_area;
-	scroll->delta_y = delta_y;
-	scroll->bar_tree = lab_wlr_scene_tree_create(osd_output->tree);
-	wlr_scene_node_set_position(&scroll->bar_tree->node,
-		bar_area.x, bar_area.y);
-
-	struct lab_scene_rect_options scrollbar_opts = {
-		.border_colors = (float *[1]) { border_color },
-		.nr_borders = 1,
-		.border_width = 1,
-		.bg_color = bg_color,
-		.width = bar_area.width,
-		.height = bar_area.height * nr_visible_rows / nr_rows,
-	};
-	scroll->bar = lab_scene_rect_create(scroll->bar_tree, &scrollbar_opts);
-}
-
-static int
-LABWC_src_cycle_osd_scroll_c_get_cycle_idx(struct cycle_osd_output *osd_output)
-{
-	int idx = 0;
-	struct cycle_osd_item *item;
-	wl_list_for_each(item, &osd_output->items, link) {
-		if (item->view == server.cycle.selected_view) {
-			return idx;
-		}
-		idx++;
-	}
-	assert(false && "selected view not found in items");
-	return -1;
-}
-
-void
-cycle_osd_scroll_update(struct cycle_osd_output *osd_output)
-{
-	struct cycle_osd_scroll_context *scroll = &osd_output->scroll;
-	if (!scroll->bar) {
-		return;
-	}
-
-	int cycle_idx = LABWC_src_cycle_osd_scroll_c_get_cycle_idx(osd_output);
-
-	/* Update the range of visible rows */
-	int bottom_row_idx = scroll->top_row_idx + scroll->nr_visible_rows;
-	while (cycle_idx < scroll->top_row_idx * scroll->nr_cols) {
-		scroll->top_row_idx--;
-		bottom_row_idx--;
-	}
-	while (cycle_idx >= bottom_row_idx * scroll->nr_cols) {
-		scroll->top_row_idx++;
-		bottom_row_idx++;
-	}
-
-	/* Vertically move scrollbar by (bar height) / (# of total rows) */
-	wlr_scene_node_set_position(&scroll->bar->tree->node, 0,
-		scroll->bar_area.height * scroll->top_row_idx / scroll->nr_rows);
-	/* Vertically move items */
-	wlr_scene_node_set_position(&osd_output->items_tree->node, 0,
-		-scroll->delta_y * scroll->top_row_idx);
-
-	/* Hide items outside of visible area */
-	int idx = 0;
-	struct cycle_osd_item *item;
-	wl_list_for_each(item, &osd_output->items, link) {
-		bool visible = idx >= scroll->top_row_idx * scroll->nr_cols
-			&& idx < bottom_row_idx * scroll->nr_cols;
-		wlr_scene_node_set_enabled(&item->tree->node, visible);
-		idx++;
-	}
-}
-
-
-/* ===== source: src/cycle/osd-thumbnail.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-
-struct LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_item {
-	struct cycle_osd_item base;
-	struct scaled_font_buffer *normal_label;
-	struct scaled_font_buffer *active_label;
-	struct lab_scene_rect *active_bg;
-};
-
-static void
-LABWC_src_cycle_osd_thumbnail_c_render_node(struct wlr_render_pass *pass,
-		struct wlr_scene_node *node, int x, int y)
-{
-	switch (node->type) {
-	case WLR_SCENE_NODE_TREE: {
-		struct wlr_scene_tree *tree = wlr_scene_tree_from_node(node);
-		struct wlr_scene_node *child;
-		wl_list_for_each(child, &tree->children, link) {
-			LABWC_src_cycle_osd_thumbnail_c_render_node(pass, child, x + node->x, y + node->y);
-		}
-		break;
-	}
-	case WLR_SCENE_NODE_BUFFER: {
-		struct wlr_scene_buffer *scene_buffer =
-			wlr_scene_buffer_from_node(node);
-		if (!scene_buffer->buffer) {
-			break;
-		}
-		struct wlr_texture *texture = NULL;
-		struct wlr_client_buffer *client_buffer =
-			wlr_client_buffer_get(scene_buffer->buffer);
-		if (client_buffer) {
-			texture = client_buffer->texture;
-		}
-		if (!texture) {
-			break;
-		}
-		wlr_render_pass_add_texture(pass, &(struct wlr_render_texture_options){
-			.texture = texture,
-			.src_box = scene_buffer->src_box,
-			.dst_box = {
-				.x = x,
-				.y = y,
-				.width = scene_buffer->dst_width,
-				.height = scene_buffer->dst_height,
-			},
-			.transform = scene_buffer->transform,
-		});
-		break;
-	}
-	case WLR_SCENE_NODE_RECT:
-		/* should be unreached */
-		break;
-	}
-}
-
-static struct wlr_buffer *
-LABWC_src_cycle_osd_thumbnail_c_render_thumb(struct output *output, struct view *view)
-{
-	if (!view->content_tree) {
-		/*
-		 * Defensive. Could possibly occur if view was unmapped
-		 * with OSD already displayed.
-		 */
-		return NULL;
-	}
-	struct wlr_buffer *buffer = wlr_allocator_create_buffer(server.allocator,
-		view->current.width, view->current.height,
-		&output->wlr_output->swapchain->format);
-	if (!buffer) {
-		return NULL;
-	}
-	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
-		server.renderer, buffer, NULL);
-	LABWC_src_cycle_osd_thumbnail_c_render_node(pass, &view->content_tree->node, 0, 0);
-	if (!wlr_render_pass_submit(pass)) {
-		wlr_buffer_drop(buffer);
-		return NULL;
-	}
-	return buffer;
-}
-
-static struct scaled_font_buffer *
-LABWC_src_cycle_osd_thumbnail_c_create_label(struct wlr_scene_tree *parent, struct view *view,
-		struct window_switcher_thumbnail_theme *switcher_theme,
-		const float *text_color, const float *bg_color, int y)
-{
-	struct buf buf = BUF_INIT;
-	cycle_osd_field_set_custom(&buf, view,
-		rc.window_switcher.osd.thumbnail_label_format);
-	struct scaled_font_buffer *buffer =
-		scaled_font_buffer_create(parent);
-	scaled_font_buffer_update(buffer, buf.data,
-		switcher_theme->item_width - 2 * switcher_theme->item_padding,
-		&rc.font_osd, text_color, bg_color);
-	buf_reset(&buf);
-	wlr_scene_node_set_position(&buffer->scene_buffer->node,
-		(switcher_theme->item_width - buffer->width) / 2, y);
-	return buffer;
-}
-
-static struct LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_item *
-LABWC_src_cycle_osd_thumbnail_c_create_item_scene(struct wlr_scene_tree *parent, struct view *view,
-		struct cycle_osd_output *osd_output)
-{
-	struct theme *theme = rc.theme;
-	struct window_switcher_thumbnail_theme *switcher_theme =
-		&theme->osd_window_switcher_thumbnail;
-	int padding = theme->border_width + switcher_theme->item_padding;
-	int title_y = switcher_theme->item_height - padding - switcher_theme->title_height;
-	struct wlr_box thumb_bounds = {
-		.x = padding,
-		.y = padding,
-		.width = switcher_theme->item_width - 2 * padding,
-		.height = title_y - 2 * padding,
-	};
-	if (thumb_bounds.width <= 0 || thumb_bounds.height <= 0) {
-		return NULL;
-	}
-
-	struct LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_item *item = znew(*item);
-	wl_list_append(&osd_output->items, &item->base.link);
-	struct wlr_scene_tree *tree = lab_wlr_scene_tree_create(parent);
-	node_descriptor_create(&tree->node, LAB_NODE_CYCLE_OSD_ITEM, NULL, item);
-	item->base.tree = tree;
-	item->base.view = view;
-
-	/* background for selected item */
-	struct lab_scene_rect_options opts = {
-		.border_colors = (float *[1]) { switcher_theme->item_active_border_color },
-		.nr_borders = 1,
-		.border_width = switcher_theme->item_active_border_width,
-		.bg_color = switcher_theme->item_active_bg_color,
-		.width = switcher_theme->item_width,
-		.height = switcher_theme->item_height,
-	};
-	item->active_bg = lab_scene_rect_create(tree, &opts);
-
-	/* hitbox for mouse clicks */
-	lab_wlr_scene_rect_create(tree, switcher_theme->item_width,
-		switcher_theme->item_height, (float[4]) {0});
-
-	/* thumbnail */
-	struct wlr_buffer *thumb_buffer = LABWC_src_cycle_osd_thumbnail_c_render_thumb(osd_output->output, view);
-	if (thumb_buffer) {
-		struct wlr_scene_buffer *thumb_scene_buffer =
-			lab_wlr_scene_buffer_create(tree, thumb_buffer);
-		wlr_buffer_drop(thumb_buffer);
-		struct wlr_box thumb_box = box_fit_within(
-			thumb_buffer->width, thumb_buffer->height,
-			&thumb_bounds);
-		wlr_scene_buffer_set_dest_size(thumb_scene_buffer,
-			thumb_box.width, thumb_box.height);
-		wlr_scene_node_set_position(&thumb_scene_buffer->node,
-			thumb_box.x, thumb_box.y);
-	}
-
-	/* title */
-	item->normal_label = LABWC_src_cycle_osd_thumbnail_c_create_label(tree, view,
-		switcher_theme, theme->osd_label_text_color,
-		theme->osd_bg_color, title_y);
-	item->active_label = LABWC_src_cycle_osd_thumbnail_c_create_label(tree, view,
-		switcher_theme, theme->osd_label_text_color,
-		switcher_theme->item_active_bg_color, title_y);
-
-	/* icon */
-	int icon_size = switcher_theme->item_icon_size;
-	struct scaled_icon_buffer *icon_buffer =
-		scaled_icon_buffer_create(tree, icon_size, icon_size);
-	scaled_icon_buffer_set_view(icon_buffer, view);
-	int x = (switcher_theme->item_width - icon_size) / 2;
-	int y = title_y - padding - icon_size + 10; /* slide by 10px */
-	wlr_scene_node_set_position(&icon_buffer->scene_buffer->node, x, y);
-
-	return item;
-}
-
-static void
-LABWC_src_cycle_osd_thumbnail_c_get_items_geometry(struct output *output, int nr_thumbs,
-		int *nr_cols, int *nr_rows, int *nr_visible_rows)
-{
-	struct theme *theme = rc.theme;
-	struct window_switcher_thumbnail_theme *switcher_theme =
-		&theme->osd_window_switcher_thumbnail;
-	int output_width, output_height;
-	wlr_output_effective_resolution(output->wlr_output,
-		&output_width, &output_height);
-	int padding = theme->osd_border_width + switcher_theme->padding;
-
-	int max_bg_width = switcher_theme->max_width;
-	if (switcher_theme->max_width_is_percent) {
-		max_bg_width = output_width * switcher_theme->max_width / 100;
-	}
-
-	*nr_rows = 1;
-	*nr_cols = nr_thumbs;
-	while (1) {
-		assert(*nr_rows <= nr_thumbs);
-		int bg_width = *nr_cols * switcher_theme->item_width + 2 * padding;
-		if (bg_width < max_bg_width) {
-			break;
-		}
-		if (*nr_rows >= nr_thumbs) {
-			break;
-		}
-		(*nr_rows)++;
-		*nr_cols = (int)ceilf((float)nr_thumbs / (float)*nr_rows);
-	}
-
-	*nr_visible_rows = MIN(*nr_rows,
-		(output_height - 2 * padding) / switcher_theme->item_height);
-}
-
-static void
-LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_init(struct cycle_osd_output *osd_output)
-{
-	struct output *output = osd_output->output;
-	struct theme *theme = rc.theme;
-	struct window_switcher_thumbnail_theme *switcher_theme =
-		&theme->osd_window_switcher_thumbnail;
-	int padding = theme->osd_border_width + switcher_theme->padding;
-
-	osd_output->tree = lab_wlr_scene_tree_create(output->cycle_osd_tree);
-	osd_output->items_tree = lab_wlr_scene_tree_create(osd_output->tree);
-
-	int nr_views = wl_list_length(&server.cycle.views);
-	assert(nr_views > 0);
-	int nr_cols, nr_rows, nr_visible_rows;
-	LABWC_src_cycle_osd_thumbnail_c_get_items_geometry(output, nr_views, &nr_cols, &nr_rows, &nr_visible_rows);
-
-	/* items */
-	struct view *view;
-	int index = 0;
-	wl_list_for_each(view, &server.cycle.views, cycle_link) {
-		struct LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_item *item = LABWC_src_cycle_osd_thumbnail_c_create_item_scene(
-			osd_output->items_tree, view, osd_output);
-		if (!item) {
-			break;
-		}
-		int x = (index % nr_cols) * switcher_theme->item_width + padding;
-		int y = (index / nr_cols) * switcher_theme->item_height + padding;
-		wlr_scene_node_set_position(&item->base.tree->node, x, y);
-		index++;
-	}
-
-	int items_width = switcher_theme->item_width * nr_cols;
-	int items_height = switcher_theme->item_height * nr_visible_rows;
-
-	struct wlr_box scrollbar_area = {
-		.x = padding + items_width - SCROLLBAR_W,
-		.y = padding,
-		.width = SCROLLBAR_W,
-		.height = items_height,
-	};
-	cycle_osd_scroll_init(osd_output, scrollbar_area,
-		switcher_theme->item_height, nr_cols, nr_rows, nr_visible_rows,
-		switcher_theme->item_active_border_color,
-		switcher_theme->item_active_bg_color);
-
-	/* background */
-	struct lab_scene_rect_options bg_opts = {
-		.border_colors = (float *[1]) { theme->osd_border_color },
-		.nr_borders = 1,
-		.border_width = theme->osd_border_width,
-		.bg_color = theme->osd_bg_color,
-		.width = items_width + 2 * padding,
-		.height = items_height + 2 * padding,
-	};
-	struct lab_scene_rect *bg =
-		lab_scene_rect_create(osd_output->tree, &bg_opts);
-	wlr_scene_node_lower_to_bottom(&bg->tree->node);
-
-	/* center */
-	struct wlr_box output_box;
-	wlr_output_layout_get_box(server.output_layout, output->wlr_output,
-		&output_box);
-	int lx = output_box.x + (output_box.width - bg_opts.width) / 2;
-	int ly = output_box.y + (output_box.height - bg_opts.height) / 2;
-	wlr_scene_node_set_position(&osd_output->tree->node, lx, ly);
-}
-
-static void
-LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_update(struct cycle_osd_output *osd_output)
-{
-	cycle_osd_scroll_update(osd_output);
-
-	struct LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_item *item;
-	wl_list_for_each(item, &osd_output->items, base.link) {
-		bool active = (item->base.view == server.cycle.selected_view);
-		wlr_scene_node_set_enabled(&item->active_bg->tree->node, active);
-		wlr_scene_node_set_enabled(
-			&item->active_label->scene_buffer->node, active);
-		wlr_scene_node_set_enabled(
-			&item->normal_label->scene_buffer->node, !active);
-	}
-}
-
-struct cycle_osd_impl cycle_osd_thumbnail_impl = {
-	.init = LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_init,
-	.update = LABWC_src_cycle_osd_thumbnail_c_cycle_osd_thumbnail_update,
-};
 
 
 /* ===== source: src/common/buf.c ===== */
@@ -12501,549 +10202,18 @@ scaled_buffer_invalidate_sharing(void)
 }
 
 
-/* ===== source: src/img/img-xpm.c ===== */
-// SPDX-License-Identifier: LGPL-2.0-or-later
-/*
- * XPM image loader adapted from gdk-pixbuf
- *
- * Copyright (C) 1999 Mark Crichton
- * Copyright (C) 1999 The Free Software Foundation
- *
- * Authors: Mark Crichton <crichton@gimp.org>
- *          Federico Mena-Quintero <federico@gimp.org>
- *
- * Adapted for labwc by John Lindgren, 2024
- */
-
-#include <glib.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-
-enum LABWC_src_img_img_xpm_c_buf_op { op_header, op_cmap, op_body };
-
-struct LABWC_src_img_img_xpm_c_xpm_color {
-	char *color_string;
-	uint32_t argb;
-};
-
-struct LABWC_src_img_img_xpm_c_file_handle {
-	FILE *infile;
-	struct buf buf;
-};
-
-static inline uint32_t
-LABWC_src_img_img_xpm_c_make_argb(uint8_t a, uint8_t r, uint8_t g, uint8_t b)
-{
-	return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
-}
-
-static bool
-LABWC_src_img_img_xpm_c_parse_color(const char *spec, uint32_t *argb)
-{
-	if (spec[0] != '#') {
-		return lookup_named_color(spec, argb);
-	}
-
-	int red, green, blue;
-	switch (strlen(spec + 1)) {
-	case 3:
-		if (sscanf(spec + 1, "%1x%1x%1x", &red, &green, &blue) != 3) {
-			return false;
-		}
-		*argb = LABWC_src_img_img_xpm_c_make_argb(255, (uint8_t)((red * 255) / 15),
-			(uint8_t)((green * 255) / 15), (uint8_t)((blue * 255) / 15));
-		return true;
-	case 6:
-		if (sscanf(spec + 1, "%2x%2x%2x", &red, &green, &blue) != 3) {
-			return false;
-		}
-		*argb = LABWC_src_img_img_xpm_c_make_argb(255, (uint8_t)red, (uint8_t)green, (uint8_t)blue);
-		return true;
-	case 9:
-		if (sscanf(spec + 1, "%3x%3x%3x", &red, &green, &blue) != 3) {
-			return false;
-		}
-		*argb = LABWC_src_img_img_xpm_c_make_argb(255, (uint8_t)((red * 255) / 4095),
-			(uint8_t)((green * 255) / 4095), (uint8_t)((blue * 255) / 4095));
-		return true;
-	case 12:
-		if (sscanf(spec + 1, "%4x%4x%4x", &red, &green, &blue) != 3) {
-			return false;
-		}
-		*argb = LABWC_src_img_img_xpm_c_make_argb(255, (uint8_t)((red * 255) / 65535),
-			(uint8_t)((green * 255) / 65535),
-			(uint8_t)((blue * 255) / 65535));
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool
-LABWC_src_img_img_xpm_c_xpm_seek_string(FILE *infile, const char *str)
-{
-	char instr[1024];
-
-	while (!feof(infile)) {
-		if (fscanf(infile, "%1023s", instr) < 0) {
-			return false;
-		}
-		if (strcmp(instr, str) == 0) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static bool
-LABWC_src_img_img_xpm_c_xpm_seek_char(FILE *infile, char c)
-{
-	int b, oldb;
-
-	while ((b = getc(infile)) != EOF) {
-		if (c != b && b == '/') {
-			b = getc(infile);
-			if (b == EOF) {
-				return false;
-			} else if (b == '*') { /* we have a comment */
-				b = -1;
-				do {
-					oldb = b;
-					b = getc(infile);
-					if (b == EOF) {
-						return false;
-					}
-				} while (!(oldb == '*' && b == '/'));
-			}
-		} else if (c == b) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-static bool
-LABWC_src_img_img_xpm_c_xpm_read_string(FILE *infile, struct buf *buf)
-{
-	buf_clear(buf);
-	int c;
-
-	do {
-		c = getc(infile);
-		if (c == EOF) {
-			return false;
-		}
-	} while (c != '"');
-
-	while ((c = getc(infile)) != EOF) {
-		if (c == '"') {
-			return true;
-		}
-		buf_add_char(buf, (char)c);
-	}
-
-	return false;
-}
-
-static uint32_t
-LABWC_src_img_img_xpm_c_xpm_extract_color(const char *buffer)
-{
-	const char *p = buffer;
-	int new_key = 0;
-	int key = 0;
-	int current_key = 1;
-	char word[129], color[129], current_color[129];
-	char *r;
-
-	word[0] = '\0';
-	color[0] = '\0';
-	current_color[0] = '\0';
-	while (true) {
-		/* skip whitespace */
-		for (; *p != '\0' && g_ascii_isspace(*p); p++) {
-			/* nothing */
-		}
-		/* copy word */
-		for (r = word; *p != '\0' && !g_ascii_isspace(*p)
-				&& r - word < (int)sizeof(word) - 1;
-				p++, r++) {
-			*r = *p;
-		}
-		*r = '\0';
-		if (*word == '\0') {
-			if (color[0] == '\0') { /* incomplete colormap entry */
-				return 0;
-			} else { /* end of entry, still store the last color */
-				new_key = 1;
-			}
-		} else if (key > 0 && color[0] == '\0') {
-			/* next word must be a color name part */
-			new_key = 0;
-		} else {
-			if (strcmp(word, "c") == 0) {
-				new_key = 5;
-			} else if (strcmp(word, "g") == 0) {
-				new_key = 4;
-			} else if (strcmp(word, "g4") == 0) {
-				new_key = 3;
-			} else if (strcmp(word, "m") == 0) {
-				new_key = 2;
-			} else if (strcmp(word, "s") == 0) {
-				new_key = 1;
-			} else {
-				new_key = 0;
-			}
-		}
-		if (new_key == 0) {	/* word is a color name part */
-			if (key == 0) { /* key expected */
-				return 0;
-			}
-			/* accumulate color name */
-			int len = (int)strlen(color);
-			if (len && len < (int)sizeof(color) - 1) {
-				color[len++] = ' ';
-			}
-			g_strlcpy(color + len, word, sizeof(color) - (size_t)len);
-		} else { /* word is a key */
-			if (key > current_key) {
-				current_key = key;
-				g_strlcpy(current_color, color, sizeof(current_color));
-			}
-			color[0] = '\0';
-			key = new_key;
-			if (*p == '\0') {
-				break;
-			}
-		}
-	}
-
-	uint32_t argb;
-	if (current_key > 1 && (g_ascii_strcasecmp(current_color, "None") != 0)
-			&& LABWC_src_img_img_xpm_c_parse_color(current_color, &argb)) {
-		return argb;
-	} else {
-		return 0;
-	}
-}
-
-static const char *
-LABWC_src_img_img_xpm_c_file_buffer(enum LABWC_src_img_img_xpm_c_buf_op op, struct LABWC_src_img_img_xpm_c_file_handle *h)
-{
-	switch (op) {
-	case op_header:
-		if (!LABWC_src_img_img_xpm_c_xpm_seek_string(h->infile, "XPM")) {
-			break;
-		}
-		if (!LABWC_src_img_img_xpm_c_xpm_seek_char(h->infile, '{')) {
-			break;
-		}
-		/* fallthrough */
-
-	case op_cmap:
-		LABWC_src_img_img_xpm_c_xpm_seek_char(h->infile, '"');
-		if (fseek(h->infile, -1, SEEK_CUR) != 0) {
-			return NULL;
-		}
-		/* fallthrough */
-
-	case op_body:
-		if (!LABWC_src_img_img_xpm_c_xpm_read_string(h->infile, &h->buf)) {
-			return NULL;
-		}
-		return h->buf.data;
-
-	default:
-		g_assert_not_reached();
-	}
-
-	return NULL;
-}
-
-static cairo_surface_t *
-LABWC_src_img_img_xpm_c_xpm_load_to_surface(struct LABWC_src_img_img_xpm_c_file_handle *handle)
-{
-	const char *buffer = LABWC_src_img_img_xpm_c_file_buffer(op_header, handle);
-	if (!buffer) {
-		return NULL;
-	}
-
-	int w, h, n_col, cpp, x_hot, y_hot;
-	int items = sscanf(buffer, "%d %d %d %d %d %d", &w, &h, &n_col, &cpp,
-		&x_hot, &y_hot);
-
-	if (items != 4 && items != 6) {
-		return NULL;
-	}
-
-	if (w <= 0) {
-		return NULL;
-	}
-	if (h <= 0) {
-		return NULL;
-	}
-	/* Limits (width, height, colors) modified for labwc */
-	if (h > 1024 || w > 1024) {
-		return NULL;
-	}
-	if (cpp <= 0 || cpp >= 32) {
-		return NULL;
-	}
-	if (n_col <= 0 || n_col > 1024) {
-		return NULL;
-	}
-
-	/* The hash is used for fast lookups of color from chars */
-	GHashTable *color_hash = g_hash_table_new(g_str_hash, g_str_equal);
-
-	char *name_buf = xzalloc((size_t)(n_col * (cpp + 1)));
-	struct LABWC_src_img_img_xpm_c_xpm_color *colors = znew_n(struct LABWC_src_img_img_xpm_c_xpm_color, (size_t)n_col);
-	cairo_surface_t *surface = NULL;
-	struct LABWC_src_img_img_xpm_c_xpm_color *fallbackcolor = NULL;
-	char pixel_str[32]; /* cpp < 32 */
-
-	for (int cnt = 0; cnt < n_col; cnt++) {
-		buffer = LABWC_src_img_img_xpm_c_file_buffer(op_cmap, handle);
-		if (!buffer) {
-			goto out;
-		}
-
-		struct LABWC_src_img_img_xpm_c_xpm_color *color = &colors[cnt];
-		color->color_string = &name_buf[cnt * (cpp + 1)];
-		g_strlcpy(color->color_string, buffer, (size_t)(cpp + 1));
-		buffer += strlen(color->color_string);
-
-		color->argb = LABWC_src_img_img_xpm_c_xpm_extract_color(buffer);
-
-		g_hash_table_insert(color_hash, color->color_string, color);
-
-		if (cnt == 0) {
-			fallbackcolor = color;
-		}
-	}
-
-	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
-	uint32_t *data = (uint32_t *)cairo_image_surface_get_data(surface);
-	int stride = cairo_image_surface_get_stride(surface)
-		/ (int)sizeof(uint32_t);
-
-	for (int ycnt = 0; ycnt < h; ycnt++) {
-		uint32_t *pixtmp = data + stride * ycnt;
-		int wbytes = w * cpp;
-
-		buffer = LABWC_src_img_img_xpm_c_file_buffer(op_body, handle);
-		if (!buffer || (strlen(buffer) < (size_t)wbytes)) {
-			/* Advertised width doesn't match pixels */
-			cairo_surface_destroy(surface);
-			surface = NULL;
-			goto out;
-		}
-
-		for (int n = 0; n < wbytes; n += cpp) {
-			g_strlcpy(pixel_str, &buffer[n], (size_t)(cpp + 1));
-
-			struct LABWC_src_img_img_xpm_c_xpm_color *color =
-				g_hash_table_lookup(color_hash, pixel_str);
-
-			/* Bad XPM...punt */
-			if (!color) {
-				color = fallbackcolor;
-			}
-
-			*pixtmp++ = color->argb;
-		}
-	}
-	/* let cairo know pixel data has been modified */
-	cairo_surface_mark_dirty(surface);
-
-out:
-	g_hash_table_destroy(color_hash);
-	free(colors);
-	free(name_buf);
-	return surface;
-}
-
-struct lab_data_buffer *
-img_xpm_load(const char *filename)
-{
-	struct LABWC_src_img_img_xpm_c_file_handle h = {0};
-	h.infile = fopen(filename, "rb");
-	if (!h.infile) {
-		return NULL;
-	}
-
-	cairo_surface_t *surface = LABWC_src_img_img_xpm_c_xpm_load_to_surface(&h);
-	struct lab_data_buffer *buffer = NULL;
-	if (surface) {
-		buffer = buffer_adopt_cairo_surface(surface);
-	} else {
-	}
-
-	fclose(h.infile);
-	buf_reset(&h.buf);
-
-	return buffer;
-}
-
-
 /* ===== source: src/img/img-xbm.c ===== */
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Convert xbm file to buffer with cairo surface
+ * Convert a built-in 6x6 monochrome button bitmap to a cairo surface.
  *
  * Copyright Johan Malm 2020-2023
  */
 
 #include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-enum LABWC_src_img_img_xbm_c_token_type {
-	TOKEN_NONE = 0,
-	TOKEN_IDENT,
-	TOKEN_INT,
-	TOKEN_SPECIAL,
-	TOKEN_OTHER,
-};
-
-#define MAX_TOKEN_SIZE (256)
-struct LABWC_src_img_img_xbm_c_token {
-	char name[MAX_TOKEN_SIZE];
-	int value;
-	size_t pos;
-	enum LABWC_src_img_img_xbm_c_token_type type;
-};
-
-struct LABWC_src_img_img_xbm_c_pixmap {
-	uint32_t *data;
-	int width;
-	int height;
-};
-
-struct LABWC_src_img_img_xbm_c_tokenizer_context {
-	char *buffer_position;
-	struct LABWC_src_img_img_xbm_c_token *tokens;
-	int nr_tokens, alloc_tokens;
-};
-
-static void
-LABWC_src_img_img_xbm_c_add_token(struct LABWC_src_img_img_xbm_c_tokenizer_context *ctx, enum LABWC_src_img_img_xbm_c_token_type token_type)
-{
-	if (ctx->nr_tokens == ctx->alloc_tokens) {
-		ctx->alloc_tokens = (ctx->alloc_tokens + 16) * 2;
-		ctx->tokens = xrealloc(ctx->tokens,
-			(size_t)ctx->alloc_tokens * sizeof(struct LABWC_src_img_img_xbm_c_token));
-	}
-	struct LABWC_src_img_img_xbm_c_token *token = ctx->tokens + ctx->nr_tokens;
-	memset(token, 0, sizeof(*token));
-	ctx->nr_tokens++;
-	token->type = token_type;
-}
-
-static void
-LABWC_src_img_img_xbm_c_get_identifier_token(struct LABWC_src_img_img_xbm_c_tokenizer_context *ctx)
-{
-	struct LABWC_src_img_img_xbm_c_token *token = ctx->tokens + ctx->nr_tokens - 1;
-	token->name[token->pos] = ctx->buffer_position[0];
-	token->pos++;
-	if (token->pos == MAX_TOKEN_SIZE - 1) {
-		return;
-	}
-	ctx->buffer_position++;
-	switch (ctx->buffer_position[0]) {
-	case '\0':
-		return;
-	case 'a' ... 'z':
-	case 'A' ... 'Z':
-	case '0' ... '9':
-	case '_':
-	case '#':
-		LABWC_src_img_img_xbm_c_get_identifier_token(ctx);
-		break;
-	default:
-		break;
-	}
-}
-
-static void
-LABWC_src_img_img_xbm_c_get_number_token(struct LABWC_src_img_img_xbm_c_tokenizer_context *ctx)
-{
-	struct LABWC_src_img_img_xbm_c_token *token = ctx->tokens + ctx->nr_tokens - 1;
-	token->name[token->pos] = ctx->buffer_position[0];
-	token->pos++;
-	if (token->pos == MAX_TOKEN_SIZE - 1) {
-		return;
-	}
-	ctx->buffer_position++;
-	switch (ctx->buffer_position[0]) {
-	case '\0':
-		return;
-	case '0' ... '9':
-	case 'a' ... 'f':
-	case 'A' ... 'F':
-	case 'x':
-		LABWC_src_img_img_xbm_c_get_number_token(ctx);
-		break;
-	default:
-		break;
-	}
-}
-
-static void
-LABWC_src_img_img_xbm_c_get_special_char_token(struct LABWC_src_img_img_xbm_c_tokenizer_context *ctx)
-{
-	struct LABWC_src_img_img_xbm_c_token *token = ctx->tokens + ctx->nr_tokens - 1;
-	token->name[0] = ctx->buffer_position[0];
-	ctx->buffer_position++;
-}
-
-/**
- * tokenize_xbm - tokenize xbm file
- * @buffer: buffer containing xbm file
- * return token vector
- */
-static struct LABWC_src_img_img_xbm_c_token *
-LABWC_src_img_img_xbm_c_tokenize_xbm(char *buffer)
-{
-	struct LABWC_src_img_img_xbm_c_tokenizer_context ctx = {0};
-	ctx.buffer_position = buffer;
-
-	for (;;) {
-		switch (ctx.buffer_position[0]) {
-		case '\0':
-			goto out;
-		case 'a' ... 'z':
-		case 'A' ... 'Z':
-		case '_':
-		case '#':
-			LABWC_src_img_img_xbm_c_add_token(&ctx, TOKEN_IDENT);
-			LABWC_src_img_img_xbm_c_get_identifier_token(&ctx);
-			continue;
-		case '0' ... '9': {
-			LABWC_src_img_img_xbm_c_add_token(&ctx, TOKEN_INT);
-			LABWC_src_img_img_xbm_c_get_number_token(&ctx);
-			struct LABWC_src_img_img_xbm_c_token *token = ctx.tokens + ctx.nr_tokens - 1;
-			token->value = (int)strtol(token->name, NULL, 0);
-			continue;
-		}
-		case '{':
-			LABWC_src_img_img_xbm_c_add_token(&ctx, TOKEN_SPECIAL);
-			LABWC_src_img_img_xbm_c_get_special_char_token(&ctx);
-			continue;
-		default:
-			break;
-		}
-		++ctx.buffer_position;
-	}
-out:
-	LABWC_src_img_img_xbm_c_add_token(&ctx, TOKEN_NONE); /* vector end marker */
-	return ctx.tokens;
-}
+#define LABWC_BUILTIN_ICON_SIZE (6)
 
 static uint32_t
 LABWC_src_img_img_xbm_c_argb32(float *rgba)
@@ -13056,283 +10226,45 @@ LABWC_src_img_img_xbm_c_argb32(float *rgba)
 		((r[1] & 0xff) << 8) | (r[2] & 0xff);
 }
 
-static void
-LABWC_src_img_img_xbm_c_process_bytes(struct LABWC_src_img_img_xbm_c_pixmap *pixmap, struct LABWC_src_img_img_xbm_c_token *tokens, uint32_t color)
-{
-	pixmap->data = znew_n(uint32_t, (size_t)(pixmap->width * pixmap->height));
-	struct LABWC_src_img_img_xbm_c_token *t = tokens;
-	for (int row = 0; row < pixmap->height; row++) {
-		int byte = 1;
-		for (int col = 0; col < pixmap->width; col++) {
-			if (col == byte * 8) {
-				++byte;
-				++t;
-			}
-			if (!t->type) {
-				return;
-			}
-			if (t->type != TOKEN_INT) {
-				return;
-			}
-			int bit = 1 << (col % 8);
-			if (t->value & bit) {
-				pixmap->data[row * pixmap->width + col] = color;
-			}
-		}
-		++t;
-	}
-}
-
-/**
- * parse_xbm_tokens - parse xbm tokens and create pixmap
- * @tokens: token vector
- */
-static struct LABWC_src_img_img_xbm_c_pixmap
-LABWC_src_img_img_xbm_c_parse_xbm_tokens(struct LABWC_src_img_img_xbm_c_token *tokens, uint32_t color)
-{
-	struct LABWC_src_img_img_xbm_c_pixmap pixmap = { 0 };
-
-	for (struct LABWC_src_img_img_xbm_c_token *t = tokens; t->type; t++) {
-		if (pixmap.width && pixmap.height) {
-			if (t->type != TOKEN_INT) {
-				continue;
-			}
-			LABWC_src_img_img_xbm_c_process_bytes(&pixmap, t, color);
-			goto out;
-		}
-		if (strstr(t->name, "width")) {
-			pixmap.width = atoi((++t)->name);
-		} else if (strstr(t->name, "height")) {
-			pixmap.height = atoi((++t)->name);
-		}
-	}
-out:
-	return pixmap;
-}
-
 /*
- * Openbox built-in icons are not bigger than 8x8, so have only written this
- * function to cope with that max size
+ * Openbox built-in icons are 6x6, with one byte per row.  The low six bits
+ * of each byte are the pixels from left to right.
  */
-#define LABWC_BUILTIN_ICON_MAX_SIZE (8)
-
-/**
- * parse_xbm_builtin - parse builtin xbm button and create pixmap
- * @button: button byte array (xbm format)
- */
-static struct LABWC_src_img_img_xbm_c_pixmap
-LABWC_src_img_img_xbm_c_parse_xbm_builtin(const char *button, int size, uint32_t color)
-{
-	struct LABWC_src_img_img_xbm_c_pixmap pixmap = { 0 };
-
-	assert(size <= LABWC_BUILTIN_ICON_MAX_SIZE);
-	pixmap.width = size;
-	pixmap.height = size;
-
-	struct LABWC_src_img_img_xbm_c_token t[LABWC_BUILTIN_ICON_MAX_SIZE + 1];
-	for (int i = 0; i < size; i++) {
-		t[i].value = button[i];
-		t[i].type = TOKEN_INT;
-	}
-	t[size].type = TOKEN_NONE;
-	LABWC_src_img_img_xbm_c_process_bytes(&pixmap, t, color);
-	return pixmap;
-}
-
 struct lab_data_buffer *
 img_xbm_load_from_bitmap(const char *bitmap, float *rgba)
 {
+	assert(bitmap);
+
+	const int size = LABWC_BUILTIN_ICON_SIZE;
 	uint32_t color = LABWC_src_img_img_xbm_c_argb32(rgba);
-	struct LABWC_src_img_img_xbm_c_pixmap pixmap = LABWC_src_img_img_xbm_c_parse_xbm_builtin(bitmap, 6, color);
+	uint32_t *data = znew_n(uint32_t, (size_t)(size * size));
 
-	return buffer_create_from_data(pixmap.data, (uint32_t)pixmap.width,
-		(uint32_t)pixmap.height, (uint32_t)(pixmap.width * 4));
-}
-
-struct lab_data_buffer *
-img_xbm_load(const char *filename, float *rgba)
-{
-	struct LABWC_src_img_img_xbm_c_pixmap pixmap = {0};
-	if (string_null_or_empty(filename)) {
-		return NULL;
-	}
-	uint32_t color = LABWC_src_img_img_xbm_c_argb32(rgba);
-
-	/* Read file into memory as it's easier to tokenize that way */
-	struct buf token_buf = buf_from_file(filename);
-	if (token_buf.len) {
-		struct LABWC_src_img_img_xbm_c_token *tokens = LABWC_src_img_img_xbm_c_tokenize_xbm(token_buf.data);
-		pixmap = LABWC_src_img_img_xbm_c_parse_xbm_tokens(tokens, color);
-		if (tokens) {
-			free(tokens);
+	for (int row = 0; row < size; row++) {
+		uint8_t bits = (uint8_t)bitmap[row];
+		for (int col = 0; col < size; col++) {
+			if (bits & (1u << col)) {
+				data[row * size + col] = color;
+			}
 		}
 	}
-	buf_reset(&token_buf);
-	if (!pixmap.data) {
-		return NULL;
-	}
 
-	return buffer_create_from_data(pixmap.data, (uint32_t)pixmap.width,
-		(uint32_t)pixmap.height, (uint32_t)(pixmap.width * 4));
+	return buffer_create_from_data(data, (uint32_t)size, (uint32_t)size,
+		(uint32_t)(size * 4));
 }
-#undef LABWC_BUILTIN_ICON_MAX_SIZE
-#undef MAX_TOKEN_SIZE
-
-
-/* ===== source: src/img/img-svg.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (C) Johan Malm 2023
- */
-#include <cairo.h>
-#include <librsvg/rsvg.h>
-#include <stdio.h>
-
-RsvgHandle *
-img_svg_load(const char *filename)
-{
-	if (string_null_or_empty(filename)) {
-		return NULL;
-	}
-
-	GError *err = NULL;
-	RsvgHandle *svg = rsvg_handle_new_from_file(filename, &err);
-	if (err) {
-		g_error_free(err);
-		/*
-		 * rsvg_handle_new_from_file() returns NULL if an error occurs,
-		 * so there is no need to free svg here.
-		 */
-		return NULL;
-	}
-	return svg;
-}
-
-struct lab_data_buffer *
-img_svg_render(RsvgHandle *svg, int w, int h, double scale)
-{
-	struct lab_data_buffer *buffer =
-		buffer_create_cairo((uint32_t)w, (uint32_t)h, (float)scale);
-	cairo_surface_t *image = buffer->surface;
-	cairo_t *cr = cairo_create(image);
-	GError *err = NULL;
-
-	RsvgRectangle viewport = {
-		.width = w,
-		.height = h,
-	};
-	rsvg_handle_render_document(svg, cr, &viewport, &err);
-	if (err) {
-		g_error_free(err);
-		goto error;
-	}
-	if (cairo_surface_status(image)) {
-		goto error;
-	}
-	cairo_surface_flush(buffer->surface);
-	cairo_destroy(cr);
-
-	return buffer;
-
-error:
-	wlr_buffer_drop(&buffer->base);
-	cairo_destroy(cr);
-	return NULL;
-}
-
-
-/* ===== source: src/img/img-png.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (C) Johan Malm 2023
- */
-#include <cairo.h>
-#include <png.h>
-#include <stdbool.h>
-#include <stdio.h>
-
-/*
- * cairo_image_surface_create_from_png() does not gracefully handle non-png
- * files, so we verify the header before trying to read the rest of the file.
- */
-#define PNG_BYTES_TO_CHECK (4)
-static bool
-LABWC_src_img_img_png_c_ispng(const char *filename)
-{
-	unsigned char header[PNG_BYTES_TO_CHECK];
-	FILE *fp = fopen(filename, "rb");
-	if (!fp) {
-		return false;
-	}
-	if (fread(header, 1, PNG_BYTES_TO_CHECK, fp) != PNG_BYTES_TO_CHECK) {
-		fclose(fp);
-		return false;
-	}
-	if (png_sig_cmp(header, (png_size_t)0, PNG_BYTES_TO_CHECK)) {
-		fclose(fp);
-		return false;
-	}
-	fclose(fp);
-	return true;
-}
-
-#undef PNG_BYTES_TO_CHECK
-
-struct lab_data_buffer *
-img_png_load(const char *filename)
-{
-	if (string_null_or_empty(filename)) {
-		return NULL;
-	}
-	if (!LABWC_src_img_img_png_c_ispng(filename)) {
-		return NULL;
-	}
-
-	cairo_surface_t *image = cairo_image_surface_create_from_png(filename);
-	if (cairo_surface_status(image)) {
-		cairo_surface_destroy(image);
-		return NULL;
-	}
-
-	if (cairo_image_surface_get_format(image) == CAIRO_FORMAT_ARGB32) {
-		return buffer_adopt_cairo_surface(image);
-	} else {
-		/* Copy non-ARGB32 surface to ARGB32 buffer */
-		/* TODO: directly set non-ARGB32 surface in lab_data_buffer */
-		struct lab_data_buffer *buffer = buffer_create_cairo(
-			(uint32_t)cairo_image_surface_get_width(image),
-			(uint32_t)cairo_image_surface_get_height(image), 1);
-		cairo_t *cairo = cairo_create(buffer->surface);
-		cairo_set_source_surface(cairo, image, 0, 0);
-		cairo_paint(cairo);
-		cairo_surface_flush(cairo_get_target(cairo));
-		cairo_destroy(cairo);
-
-		cairo_surface_destroy(image);
-
-		return buffer;
-	}
-}
-#undef PNG_BYTES_TO_CHECK
+#undef LABWC_BUILTIN_ICON_SIZE
 
 
 /* ===== source: src/img/img.c ===== */
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <assert.h>
-#if HAVE_RSVG
-#endif
 
 struct lab_img_data {
-	enum lab_img_type type;
 	/* lab_img_data is refcounted to be shared by multiple lab_imgs */
 	int refcount;
 
-	/* Handler for the loaded image file */
-	struct lab_data_buffer *buffer; /* for PNG/XBM/XPM image */
-#if HAVE_RSVG
-	RsvgHandle *svg; /* for SVG image */
-#endif
+	/* Rendered built-in XBM glyph shared by copies of this lab_img */
+	struct lab_data_buffer *buffer;
 };
 
 static struct lab_img *
@@ -13346,47 +10278,6 @@ LABWC_src_img_img_c_create_img(struct lab_img_data *img_data)
 }
 
 struct lab_img *
-lab_img_load(enum lab_img_type type, const char *path, float *xbm_color)
-{
-	if (string_null_or_empty(path)) {
-		return NULL;
-	}
-
-	struct lab_img_data *img_data = znew(*img_data);
-	img_data->type = type;
-
-	switch (type) {
-	case LAB_IMG_PNG:
-		img_data->buffer = img_png_load(path);
-		break;
-	case LAB_IMG_XBM:
-		assert(xbm_color);
-		img_data->buffer = img_xbm_load(path, xbm_color);
-		break;
-	case LAB_IMG_XPM:
-		img_data->buffer = img_xpm_load(path);
-		break;
-	case LAB_IMG_SVG:
-#if HAVE_RSVG
-		img_data->svg = img_svg_load(path);
-#endif
-		break;
-	}
-
-	bool img_is_loaded = (bool)img_data->buffer;
-#if HAVE_RSVG
-	img_is_loaded |= (bool)img_data->svg;
-#endif
-
-	if (img_is_loaded) {
-		return LABWC_src_img_img_c_create_img(img_data);
-	} else {
-		free(img_data);
-		return NULL;
-	}
-}
-
-struct lab_img *
 lab_img_load_from_bitmap(const char *bitmap, float *rgba)
 {
 	struct lab_data_buffer *buffer = img_xbm_load_from_bitmap(bitmap, rgba);
@@ -13395,7 +10286,6 @@ lab_img_load_from_bitmap(const char *bitmap, float *rgba)
 	}
 
 	struct lab_img_data *img_data = znew(*img_data);
-	img_data->type = LAB_IMG_XBM;
 	img_data->buffer = buffer;
 
 	return LABWC_src_img_img_c_create_img(img_data);
@@ -13419,24 +10309,9 @@ lab_img_add_modifier(struct lab_img *img, lab_img_modifier_func_t modifier)
 struct lab_data_buffer *
 lab_img_render(struct lab_img *img, int width, int height, double scale)
 {
-	struct lab_data_buffer *buffer = NULL;
-
 	/* Render the image into the buffer for the given size */
-	switch (img->data->type) {
-	case LAB_IMG_PNG:
-	case LAB_IMG_XBM:
-	case LAB_IMG_XPM:
-		buffer = buffer_resize(img->data->buffer, width, height, scale);
-		break;
-#if HAVE_RSVG
-	case LAB_IMG_SVG:
-		buffer = img_svg_render(img->data->svg, width, height, scale);
-		break;
-#endif
-	default:
-		break;
-	}
-
+	struct lab_data_buffer *buffer =
+		buffer_resize(img->data->buffer, width, height, scale);
 	if (!buffer) {
 		return NULL;
 	}
@@ -13468,11 +10343,6 @@ lab_img_destroy(struct lab_img *img)
 		if (img->data->buffer) {
 			wlr_buffer_drop(&img->data->buffer->base);
 		}
-#if HAVE_RSVG
-		if (img->data->svg) {
-			g_object_unref(img->data->svg);
-		}
-#endif
 		free(img->data);
 	}
 
@@ -13493,339 +10363,6 @@ lab_img_equal(struct lab_img *img_a, struct lab_img *img_b)
 	return img_a->modifiers.size == 0
 		|| !memcmp(img_a->modifiers.data, img_b->modifiers.data,
 			img_a->modifiers.size);
-}
-
-
-/* ===== source: src/scaled-buffer/scaled-icon-buffer.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-#include <assert.h>
-#include <string.h>
-
-#if HAVE_LIBSFDO
-
-static struct lab_data_buffer *
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_choose_best_icon_buffer(struct scaled_icon_buffer *self, int icon_size, double scale)
-{
-	int best_dist = -INT_MAX;
-	struct lab_data_buffer *best_buffer = NULL;
-
-	struct lab_data_buffer **buffer;
-	wl_array_for_each(buffer, &self->view_icon_buffers) {
-		int curr_dist = (*buffer)->base.width - (int)(icon_size * scale);
-		bool curr_is_better;
-		if ((curr_dist < 0 && best_dist > 0)
-				|| (curr_dist > 0 && best_dist < 0)) {
-			/* prefer too big icon over too small icon */
-			curr_is_better = curr_dist > 0;
-		} else {
-			curr_is_better = abs(curr_dist) < abs(best_dist);
-		}
-		if (curr_is_better) {
-			best_dist = curr_dist;
-			best_buffer = *buffer;
-		}
-	}
-	return best_buffer;
-}
-
-static struct lab_data_buffer *
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_img_to_buffer(struct lab_img *img, int width, int height, double scale)
-{
-	struct lab_data_buffer *buffer = lab_img_render(img, width, height, scale);
-	lab_img_destroy(img);
-	return buffer;
-}
-
-/*
- * Load an icon from application-supplied icon name or buffers.
- * Wayland apps can provide icon names and buffers via xdg-toplevel-icon protocol.
- * X11 apps can provide icon buffers via _NET_WM_ICON property.
- */
-static struct lab_data_buffer *
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_client_icon(struct scaled_icon_buffer *self, int icon_size, double scale)
-{
-	struct lab_img *img = desktop_entry_load_icon(self->view_icon_name,
-		icon_size, (float)scale);
-	if (img) {
-		return LABWC_src_scaled_buffer_scaled_icon_buffer_c_img_to_buffer(img, self->width, self->height, scale);
-	}
-
-	struct lab_data_buffer *buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c_choose_best_icon_buffer(self, icon_size, scale);
-	if (buffer) {
-		return buffer_resize(buffer, self->width, self->height, scale);
-	}
-
-	return NULL;
-}
-
-/*
- * Load an icon by a view's app_id. For example, if the app_id is 'firefox', then
- * libsfdo will parse firefox.desktop to get the Icon name and then find that icon
- * based on the icon theme specified in rc.xml.
- */
-static struct lab_data_buffer *
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_server_icon(struct scaled_icon_buffer *self, int icon_size, double scale)
-{
-	struct lab_img *img = desktop_entry_load_icon_from_app_id(
-		self->view_app_id, icon_size, (float)scale);
-	if (img) {
-		return LABWC_src_scaled_buffer_scaled_icon_buffer_c_img_to_buffer(img, self->width, self->height, scale);
-	}
-
-	return NULL;
-}
-
-#endif /* HAVE_LIBSFDO */
-
-static struct lab_data_buffer *
-LABWC_src_scaled_buffer_scaled_icon_buffer_c__create_buffer(struct scaled_buffer *scaled_buffer, double scale)
-{
-#if HAVE_LIBSFDO
-	struct scaled_icon_buffer *self = scaled_buffer->data;
-	int icon_size = MIN(self->width, self->height);
-	struct lab_img *img = NULL;
-	struct lab_data_buffer *buffer = NULL;
-
-	if (self->icon_name) {
-		/* generic icon (e.g. menu icons) */
-		img = desktop_entry_load_icon(self->icon_name,
-			icon_size, (float)scale);
-		if (img) {
-			return LABWC_src_scaled_buffer_scaled_icon_buffer_c_img_to_buffer(img, self->width, self->height, scale);
-		}
-		return NULL;
-	}
-
-	/* window icon */
-	if (self->view_icon_prefer_client) {
-		buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_client_icon(self, icon_size, scale);
-		if (buffer) {
-			return buffer;
-		}
-		buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_server_icon(self, icon_size, scale);
-		if (buffer) {
-			return buffer;
-		}
-	} else {
-		buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_server_icon(self, icon_size, scale);
-		if (buffer) {
-			return buffer;
-		}
-		buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c_load_client_icon(self, icon_size, scale);
-		if (buffer) {
-			return buffer;
-		}
-	}
-	/* If both client and server icons are unavailable, use the fallback icon */
-	img = desktop_entry_load_icon(rc.fallback_app_icon_name,
-		icon_size, (float)scale);
-	if (img) {
-		return LABWC_src_scaled_buffer_scaled_icon_buffer_c_img_to_buffer(img, self->width, self->height, scale);
-	}
-#endif /* HAVE_LIBSFDO */
-	return NULL;
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_set_icon_buffers(struct scaled_icon_buffer *self, struct wl_array *buffers)
-{
-	struct lab_data_buffer **icon_buffer;
-	wl_array_for_each(icon_buffer, &self->view_icon_buffers) {
-		wlr_buffer_unlock(&(*icon_buffer)->base);
-	}
-	wl_array_release(&self->view_icon_buffers);
-	wl_array_init(&self->view_icon_buffers);
-
-	if (!buffers) {
-		return;
-	}
-
-	wl_array_for_each(icon_buffer, buffers) {
-		wlr_buffer_lock(&(*icon_buffer)->base);
-	}
-	wl_array_copy(&self->view_icon_buffers, buffers);
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c__destroy(struct scaled_buffer *scaled_buffer)
-{
-	struct scaled_icon_buffer *self = scaled_buffer->data;
-	if (self->view) {
-		wl_list_remove(&self->on_view.set_icon.link);
-		wl_list_remove(&self->on_view.new_title.link);
-		wl_list_remove(&self->on_view.new_app_id.link);
-		wl_list_remove(&self->on_view.destroy.link);
-	}
-	free(self->view_app_id);
-	free(self->view_icon_name);
-	LABWC_src_scaled_buffer_scaled_icon_buffer_c_set_icon_buffers(self, NULL);
-	free(self->icon_name);
-	free(self);
-}
-
-static bool
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_icon_buffers_equal(struct wl_array *a, struct wl_array *b)
-{
-	if (a->size != b->size) {
-		return false;
-	}
-	return a->size == 0 || !memcmp(a->data, b->data, a->size);
-}
-
-static bool
-LABWC_src_scaled_buffer_scaled_icon_buffer_c__equal(struct scaled_buffer *scaled_buffer_a,
-	struct scaled_buffer *scaled_buffer_b)
-{
-	struct scaled_icon_buffer *a = scaled_buffer_a->data;
-	struct scaled_icon_buffer *b = scaled_buffer_b->data;
-
-	return str_equal(a->view_app_id, b->view_app_id)
-		&& a->view_icon_prefer_client == b->view_icon_prefer_client
-		&& str_equal(a->view_icon_name, b->view_icon_name)
-		&& LABWC_src_scaled_buffer_scaled_icon_buffer_c_icon_buffers_equal(&a->view_icon_buffers, &b->view_icon_buffers)
-		&& str_equal(a->icon_name, b->icon_name)
-		&& a->width == b->width
-		&& a->height == b->height;
-}
-
-static struct scaled_buffer_impl LABWC_src_scaled_buffer_scaled_icon_buffer_c_impl = {
-	.create_buffer = LABWC_src_scaled_buffer_scaled_icon_buffer_c__create_buffer,
-	.destroy = LABWC_src_scaled_buffer_scaled_icon_buffer_c__destroy,
-	.equal = LABWC_src_scaled_buffer_scaled_icon_buffer_c__equal,
-};
-
-struct scaled_icon_buffer *
-scaled_icon_buffer_create(struct wlr_scene_tree *parent, int width, int height)
-{
-	assert(parent);
-	assert(width >= 0 && height >= 0);
-
-	struct scaled_buffer *scaled_buffer = scaled_buffer_create(
-		parent, &LABWC_src_scaled_buffer_scaled_icon_buffer_c_impl, /* drop_buffer */ true);
-	struct scaled_icon_buffer *self = znew(*self);
-	self->scaled_buffer = scaled_buffer;
-	self->scene_buffer = scaled_buffer->scene_buffer;
-	self->width = width;
-	self->height = height;
-
-	scaled_buffer->data = self;
-
-	return self;
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_set_icon(struct wl_listener *listener, void *data)
-{
-	struct scaled_icon_buffer *self =
-		wl_container_of(listener, self, on_view.set_icon);
-
-	bool icon_name_equal = str_equal(self->view_icon_name, self->view->icon.name);
-	if (icon_name_equal && LABWC_src_scaled_buffer_scaled_icon_buffer_c_icon_buffers_equal(&self->view_icon_buffers,
-			&self->view->icon.buffers)) {
-		return;
-	}
-
-	if (!icon_name_equal) {
-		zfree(self->view_icon_name);
-		if (self->view->icon.name) {
-			xstrdup_replace(self->view_icon_name, self->view->icon.name);
-		}
-	}
-
-	LABWC_src_scaled_buffer_scaled_icon_buffer_c_set_icon_buffers(self, &self->view->icon.buffers);
-	scaled_buffer_request_update(self->scaled_buffer,
-		self->width, self->height);
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_title(struct wl_listener *listener, void *data)
-{
-	struct scaled_icon_buffer *self =
-		wl_container_of(listener, self, on_view.new_title);
-
-	bool prefer_client = window_rules_get_property(
-		self->view, "iconPreferClient") == LAB_PROP_TRUE;
-	if (prefer_client == self->view_icon_prefer_client) {
-		return;
-	}
-	self->view_icon_prefer_client = prefer_client;
-	scaled_buffer_request_update(self->scaled_buffer,
-		self->width, self->height);
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_app_id(struct wl_listener *listener, void *data)
-{
-	struct scaled_icon_buffer *self =
-		wl_container_of(listener, self, on_view.new_app_id);
-
-	const char *app_id = self->view->app_id;
-	if (str_equal(app_id, self->view_app_id)) {
-		return;
-	}
-
-	xstrdup_replace(self->view_app_id, app_id);
-	self->view_icon_prefer_client = window_rules_get_property(
-		self->view, "iconPreferClient") == LAB_PROP_TRUE;
-	scaled_buffer_request_update(self->scaled_buffer,
-		self->width, self->height);
-}
-
-static void
-LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_destroy(struct wl_listener *listener, void *data)
-{
-	struct scaled_icon_buffer *self =
-		wl_container_of(listener, self, on_view.destroy);
-	wl_list_remove(&self->on_view.destroy.link);
-	wl_list_remove(&self->on_view.set_icon.link);
-	wl_list_remove(&self->on_view.new_title.link);
-	wl_list_remove(&self->on_view.new_app_id.link);
-	self->view = NULL;
-}
-
-void
-scaled_icon_buffer_set_view(struct scaled_icon_buffer *self, struct view *view)
-{
-	assert(view);
-	if (self->view == view) {
-		return;
-	}
-
-	if (self->view) {
-		wl_list_remove(&self->on_view.set_icon.link);
-		wl_list_remove(&self->on_view.new_title.link);
-		wl_list_remove(&self->on_view.new_app_id.link);
-		wl_list_remove(&self->on_view.destroy.link);
-	}
-	self->view = view;
-
-	self->on_view.set_icon.notify = LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_set_icon;
-	wl_signal_add(&view->events.set_icon, &self->on_view.set_icon);
-
-	self->on_view.new_title.notify = LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_title;
-	wl_signal_add(&view->events.new_title, &self->on_view.new_title);
-
-	self->on_view.new_app_id.notify = LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_app_id;
-	wl_signal_add(&view->events.new_app_id, &self->on_view.new_app_id);
-
-	self->on_view.destroy.notify = LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_destroy;
-	wl_signal_add(&view->events.destroy, &self->on_view.destroy);
-
-	LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_set_icon(&self->on_view.set_icon, NULL);
-	LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_app_id(&self->on_view.new_app_id, NULL);
-	LABWC_src_scaled_buffer_scaled_icon_buffer_c_handle_view_new_title(&self->on_view.new_title, NULL);
-}
-
-void
-scaled_icon_buffer_set_icon_name(struct scaled_icon_buffer *self,
-	const char *icon_name)
-{
-	assert(icon_name);
-	if (str_equal(self->icon_name, icon_name)) {
-		return;
-	}
-	xstrdup_replace(self->icon_name, icon_name);
-	scaled_buffer_request_update(self->scaled_buffer, self->width, self->height);
 }
 
 
@@ -14756,7 +11293,7 @@ LABWC_src_desktop_c_desktop_focus_view_internal(struct view *view, bool raise, b
 		return;
 	}
 
-	if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
+	if (false) {
 		return;
 	}
 
@@ -15019,11 +11556,7 @@ get_cursor_context(void)
 				ret.node = node;
 				ret.type = LAB_NODE_MENUITEM;
 				return ret;
-			case LAB_NODE_CYCLE_OSD_ITEM:
-				/* Always return the top scene node for osd items */
-				ret.node = node;
-				ret.type = LAB_NODE_CYCLE_OSD_ITEM;
-				return ret;
+
 			case LAB_NODE_BUTTON_FIRST...LAB_NODE_BUTTON_LAST:
 			case LAB_NODE_SSD_ROOT:
 			case LAB_NODE_TITLEBAR:
@@ -16871,7 +13404,7 @@ LABWC_src_input_cursor_c_handle_motion_absolute(struct wl_listener *listener, vo
 static void
 LABWC_src_input_cursor_c_process_release_mousebinding(struct cursor_context *ctx, uint32_t button)
 {
-	if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
+	if (false) {
 		return;
 	}
 
@@ -16940,7 +13473,7 @@ static bool
 LABWC_src_input_cursor_c_process_press_mousebinding(struct cursor_context *ctx,
 		uint32_t button)
 {
-	if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
+	if (false) {
 		return false;
 	}
 
@@ -17105,12 +13638,7 @@ cursor_process_button_release(struct seat *seat, uint32_t button,
 		}
 		return notify;
 	}
-	if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
-		if (ctx.type == LAB_NODE_CYCLE_OSD_ITEM) {
-			cycle_on_cursor_release(ctx.node);
-		}
-		return notify;
-	}
+
 
 	if (server.input_mode != LAB_INPUT_STATE_PASSTHROUGH) {
 		return notify;
@@ -18680,7 +15208,7 @@ LABWC_src_input_keyboard_c_handle_modifiers(struct wl_listener *listener, void *
 		overlay_update(seat);
 	}
 
-	bool cycling = server.input_mode == LAB_INPUT_STATE_CYCLE;
+	bool cycling = false;
 
 	if ((cycling || seat->workspace_osd_shown_by_modifier)
 			&& !keyboard_get_all_modifiers(seat)) {
@@ -18689,7 +15217,7 @@ LABWC_src_input_keyboard_c_handle_modifiers(struct wl_listener *listener, void *
 				LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release = true;
 			} else {
 				LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release = false;
-				cycle_finish(/*switch_focus*/ true);
+
 			}
 		}
 		if (seat->workspace_osd_shown_by_modifier) {
@@ -18925,7 +15453,14 @@ LABWC_src_input_keyboard_c_handle_key_release(uint32_t evdev_keycode)
 	 */
 	if (LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release) {
 		LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release = false;
-		cycle_finish(/*switch_focus*/ true);
+		if (server.active_view && server.active_view->link.next != &server.views) {
+			struct wl_list *next = server.active_view->link.next;
+			struct view *v = wl_container_of(next, v, link);
+			desktop_focus_view(v, true);
+		} else if (!wl_list_empty(&server.views)) {
+			struct view *v = wl_container_of(server.views.next, v, link);
+			desktop_focus_view(v, true);
+		}
 	}
 
 	/*
@@ -18995,36 +15530,7 @@ LABWC_src_input_keyboard_c_handle_menu_keys(struct LABWC_src_input_keyboard_c_ke
 	}
 }
 
-/* Returns true if the keystroke is consumed */
-static bool
-LABWC_src_input_keyboard_c_handle_cycle_view_key(struct LABWC_src_input_keyboard_c_keyinfo *keyinfo)
-{
-	if (keyinfo->is_modifier) {
-		return false;
-	}
 
-	/* cycle to next */
-	for (int i = 0; i < keyinfo->translated.nr_syms; i++) {
-		if (keyinfo->translated.syms[i] == XKB_KEY_Escape) {
-			/* Esc deactivates window switcher */
-			cycle_finish(/*switch_focus*/ false);
-			return true;
-		}
-		if (keyinfo->translated.syms[i] == XKB_KEY_Up
-				|| keyinfo->translated.syms[i] == XKB_KEY_Left) {
-			/* Up/Left cycles the window backward */
-			cycle_step(LAB_CYCLE_DIR_BACKWARD);
-			return true;
-		}
-		if (keyinfo->translated.syms[i] == XKB_KEY_Down
-				|| keyinfo->translated.syms[i] == XKB_KEY_Right) {
-			/* Down/Right cycles the window forward */
-			cycle_step(LAB_CYCLE_DIR_FORWARD);
-			return true;
-		}
-	}
-	return false;
-}
 
 static enum LABWC_src_input_keyboard_c_lab_key_handled
 LABWC_src_input_keyboard_c_handle_compositor_keybindings(struct keyboard *keyboard,
@@ -19067,11 +15573,7 @@ LABWC_src_input_keyboard_c_handle_compositor_keybindings(struct keyboard *keyboa
 			key_state_store_pressed_key_as_bound(event->keycode);
 			LABWC_src_input_keyboard_c_handle_menu_keys(&keyinfo.translated);
 			return LAB_KEY_HANDLED_TRUE;
-		} else if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
-			if (LABWC_src_input_keyboard_c_handle_cycle_view_key(&keyinfo)) {
-				key_state_store_pressed_key_as_bound(event->keycode);
-				return LAB_KEY_HANDLED_TRUE;
-			}
+		} else if (false) {
 		}
 	}
 
@@ -20135,12 +16637,9 @@ static void
 LABWC_src_main_c_print_version(void)
 {
 	#define FEATURE_ENABLED(feature) (HAVE_##feature ? "+" : "-")
-	printf("jtlabwc %s (%sxwayland %snls %srsvg %slibsfdo) wlroots-%d.%d.%d\n",
+	printf("jtlabwc %s (%sxwayland) wlroots-%d.%d.%d\n",
 		LABWC_VERSION,
 		FEATURE_ENABLED(XWAYLAND),
-		FEATURE_ENABLED(NLS),
-		FEATURE_ENABLED(RSVG),
-		FEATURE_ENABLED(LIBSFDO),
 		wlr_version_get_major(),
 		wlr_version_get_minor(),
 		wlr_version_get_micro()
@@ -20279,12 +16778,6 @@ main(int argc, char *argv[])
 
 	session_environment_init();
 
-#if HAVE_NLS
-	/* Initialize locale after setting env vars */
-	setlocale(LC_ALL, "");
-	bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR);
-	textdomain(GETTEXT_PACKAGE);
-#endif
 
 	rcxml_init();
 
@@ -20406,14 +16899,7 @@ node_menuitem_from_node(struct wlr_scene_node *wlr_scene_node)
 	return (struct menuitem *)node_descriptor->data;
 }
 
-struct cycle_osd_item *
-node_cycle_osd_item_from_node(struct wlr_scene_node *wlr_scene_node)
-{
-	assert(wlr_scene_node->data);
-	struct node_descriptor *node_descriptor = wlr_scene_node->data;
-	assert(node_descriptor->type == LAB_NODE_CYCLE_OSD_ITEM);
-	return (struct cycle_osd_item *)node_descriptor->data;
-}
+
 
 struct ssd_button *
 node_try_ssd_button_from_node(struct wlr_scene_node *wlr_scene_node)
@@ -20731,7 +17217,7 @@ LABWC_src_output_c_handle_output_destroy(struct wl_listener *listener, void *dat
 		wlr_scene_node_destroy(&output->layer_tree[i]->node);
 	}
 	wlr_scene_node_destroy(&output->layer_popup_tree->node);
-	wlr_scene_node_destroy(&output->cycle_osd_tree->node);
+
 	wlr_scene_node_destroy(&output->session_lock_tree->node);
 	if (output->workspace_osd) {
 		wlr_scene_node_destroy(&output->workspace_osd->node);
@@ -21096,7 +17582,7 @@ LABWC_src_output_c_handle_new_output(struct wl_listener *listener, void *data)
 			lab_wlr_scene_tree_create(&server.scene->tree);
 	}
 	output->layer_popup_tree = lab_wlr_scene_tree_create(&server.scene->tree);
-	output->cycle_osd_tree = lab_wlr_scene_tree_create(&server.scene->tree);
+
 	output->session_lock_tree = lab_wlr_scene_tree_create(&server.scene->tree);
 
 	/*
@@ -21120,7 +17606,7 @@ LABWC_src_output_c_handle_new_output(struct wl_listener *listener, void *data)
 	wlr_scene_node_place_below(&output->layer_tree[3]->node, menu_node);
 	wlr_scene_node_place_below(&output->layer_popup_tree->node, menu_node);
 
-	wlr_scene_node_raise_to_top(&output->cycle_osd_tree->node);
+
 	wlr_scene_node_raise_to_top(&output->session_lock_tree->node);
 
 	/*
@@ -23579,17 +20065,11 @@ LABWC_src_server_c_reload_config_and_theme(void)
 	theme_finish(rc.theme);
 	theme_init(rc.theme);
 
-#if HAVE_LIBSFDO
-	desktop_entry_finish();
-	desktop_entry_init();
-#endif
-
 	struct view *view;
 	wl_list_for_each(view, &server.views, link) {
 		view_reload_ssd(view);
 	}
 
-	cycle_finish(/*switch_focus*/ false);
 	menu_reconfigure();
 	seat_reconfigure();
 	regions_reconfigure();
@@ -23716,7 +20196,6 @@ LABWC_src_server_c_allow_for_sandbox(const struct wlr_security_context_v1_state 
 #endif
 		"zxdg_importer_v1",
 		"zxdg_importer_v2",
-		"xdg_toplevel_icon_manager_v1",
 		"xdg_wm_dialog_v1",
 		/* plus */
 		"wp_alpha_modifier_v1",
@@ -23985,8 +20464,6 @@ server_init(void)
 
 	wl_list_init(&server.views);
 	wl_list_init(&server.unmanaged_surfaces);
-	wl_list_init(&server.cycle.views);
-	wl_list_init(&server.cycle.osd_outputs);
 
 	server.scene = wlr_scene_create();
 	die_if_null(server.scene);
@@ -24001,8 +20478,6 @@ server_init(void)
 	 * | Scene Tree                         | Description
 	 * | ---------------------------------- | -------------------------------------
 	 * | output->session_lock_tree          | session lock surfaces (e.g. swaylock)
-	 * | output->cycle_osd_tree             | window switcher's on-screen display
-	 * | server.cycle_preview_tree         | window switcher's previewed window
 	 * | server.menu_tree                  | labwc's server-side menus
 	 * | output->layer_popup_tree           | xdg popups on layer surfaces
 	 * | output->layer_tree[3]              | overlay layer surfaces (e.g. rofi)
@@ -24029,7 +20504,6 @@ server_init(void)
 	server.unmanaged_tree = lab_wlr_scene_tree_create(&server.scene->tree);
 #endif
 	server.menu_tree = lab_wlr_scene_tree_create(&server.scene->tree);
-	server.cycle_preview_tree = lab_wlr_scene_tree_create(&server.scene->tree);
 
 	workspaces_init();
 
@@ -24167,10 +20641,6 @@ server_init(void)
 	wlr_xdg_foreign_v1_create(server.wl_display, registry);
 	wlr_xdg_foreign_v2_create(server.wl_display, registry);
 
-#if HAVE_LIBSFDO
-	desktop_entry_init();
-#endif
-
 #if HAVE_XWAYLAND
 	xwayland_server_init(server.compositor);
 #endif
@@ -24206,9 +20676,6 @@ server_finish(void)
 {
 #if HAVE_XWAYLAND
 	xwayland_server_finish();
-#endif
-#if HAVE_LIBSFDO
-	desktop_entry_finish();
 #endif
 	wl_event_source_remove(server.sigint_source);
 	wl_event_source_remove(server.sigterm_source);
@@ -25194,7 +21661,7 @@ snap_shrink_to_next_edge(struct view *view,
 // SPDX-License-Identifier: GPL-2.0-only
 #include <assert.h>
 
-#define PADDING rc.theme->osd_window_switcher_classic.padding
+#define PADDING 4
 
 static void
 LABWC_src_ssd_resize_indicator_c_resize_indicator_reconfigure_view(struct resize_indicator *indicator)
@@ -27224,6 +23691,13 @@ LABWC_src_theme_c_parse_justification(const char *str)
  * Default colours follow the jtlab palette (see ~/jtlab/config.h):
  * surfaces #030303/#0f1011, accents #404040, foreground #ffffff.
  */
+
+/*THEME COLOURS*/
+/*THEME COLOURS*/
+/*THEME COLOURS*/
+/*THEME COLOURS*/
+/*THEME COLOURS*/
+
 static void
 LABWC_src_theme_c_theme_builtin(struct theme *theme)
 {
@@ -27232,14 +23706,14 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	theme->window_titlebar_padding_width = 0;
 
 	LABWC_src_theme_c_parse_hexstr("#404040", theme->window[SSD_ACTIVE].border_color);
-	LABWC_src_theme_c_parse_hexstr("#40404066", theme->window[SSD_INACTIVE].border_color);
+	LABWC_src_theme_c_parse_hexstr("#404040", theme->window[SSD_INACTIVE].border_color);
 
 	LABWC_src_theme_c_parse_hexstr("#ff0000", theme->window_toggled_keybinds_color);
 
 	theme->window[SSD_ACTIVE].title_bg.gradient = LAB_GRADIENT_NONE;
 	theme->window[SSD_INACTIVE].title_bg.gradient = LAB_GRADIENT_NONE;
 	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->window[SSD_ACTIVE].title_bg.color);
-	LABWC_src_theme_c_parse_hexstr("#0f1011", theme->window[SSD_INACTIVE].title_bg.color);
+	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->window[SSD_INACTIVE].title_bg.color);
 	theme->window[SSD_ACTIVE].title_bg.color_split_to[0] = FLT_MIN;
 	theme->window[SSD_INACTIVE].title_bg.color_split_to[0] = FLT_MIN;
 	theme->window[SSD_ACTIVE].title_bg.color_to[0] = FLT_MIN;
@@ -27248,7 +23722,7 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	theme->window[SSD_INACTIVE].title_bg.color_to_split_to[0] = FLT_MIN;
 
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->window[SSD_ACTIVE].label_text_color);
-	LABWC_src_theme_c_parse_hexstr("#ffffff66", theme->window[SSD_INACTIVE].label_text_color);
+	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->window[SSD_INACTIVE].label_text_color);
 	theme->window_label_text_justify = LABWC_src_theme_c_parse_justification("Center");
 
 	theme->window_button_width = 26;
@@ -27260,7 +23734,7 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 
 	for (enum lab_node_type type = LAB_NODE_BUTTON_FIRST;
 			type <= LAB_NODE_BUTTON_LAST; type++) {
-		LABWC_src_theme_c_parse_hexstr("#ffffff66",
+		LABWC_src_theme_c_parse_hexstr("#ffffff",
 			theme->window[SSD_INACTIVE].button_colors[type]);
 		LABWC_src_theme_c_parse_hexstr("#ffffff",
 			theme->window[SSD_ACTIVE].button_colors[type]);
@@ -27280,7 +23754,7 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 
 	theme->menu_items_padding_x = 7;
 	theme->menu_items_padding_y = 4;
-	LABWC_src_theme_c_parse_hexstr("#030303", theme->menu_items_bg_color);
+	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->menu_items_bg_color);
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_items_text_color);
 	LABWC_src_theme_c_parse_hexstr("#404040", theme->menu_items_active_bg_color);
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_items_active_text_color);
@@ -27294,31 +23768,10 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	theme->menu_title_text_justify = LABWC_src_theme_c_parse_justification("Center");
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_title_text_color);
 
-	theme->osd_window_switcher_classic.width = 600;
-	theme->osd_window_switcher_classic.width_is_percent = false;
-	theme->osd_window_switcher_classic.padding = 4;
-	theme->osd_window_switcher_classic.item_padding_x = 10;
-	theme->osd_window_switcher_classic.item_padding_y = 4;
-	theme->osd_window_switcher_classic.item_active_border_width = 2;
-	theme->osd_window_switcher_classic.item_active_border_color[0] = FLT_MIN;
-	theme->osd_window_switcher_classic.item_active_bg_color[0] = FLT_MIN;
-	theme->osd_window_switcher_classic.item_icon_size = -1;
 
-	theme->osd_window_switcher_thumbnail.max_width = 80;
-	theme->osd_window_switcher_thumbnail.max_width_is_percent = true;
-	theme->osd_window_switcher_thumbnail.padding = 4;
-	theme->osd_window_switcher_thumbnail.item_width = 300;
-	theme->osd_window_switcher_thumbnail.item_height = 250;
-	theme->osd_window_switcher_thumbnail.item_padding = 10;
-	theme->osd_window_switcher_thumbnail.item_active_border_width = 2;
-	theme->osd_window_switcher_thumbnail.item_active_border_color[0] = FLT_MIN;
-	theme->osd_window_switcher_thumbnail.item_active_bg_color[0] = FLT_MIN;
-	theme->osd_window_switcher_thumbnail.item_icon_size = 60;
 
 	/* inherit settings in post_processing() if not set elsewhere */
-	theme->osd_window_switcher_preview_border_width = INT_MIN;
-	zero_array(theme->osd_window_switcher_preview_border_color);
-	theme->osd_window_switcher_preview_border_color[0][0] = FLT_MIN;
+
 
 	theme->osd_workspace_switcher_boxes_width = 20;
 	theme->osd_workspace_switcher_boxes_height = 20;
@@ -27810,7 +24263,7 @@ LABWC_src_theme_c_fill_background_colors(struct theme_background *bg)
 	}
 }
 
-static void
+static void __attribute__((unused))
 LABWC_src_theme_c_fill_colors_with_osd_theme(struct theme *theme, float colors[3][4])
 {
 	memcpy(colors[0], theme->osd_bg_color, sizeof(colors[0]));
@@ -27831,7 +24284,7 @@ LABWC_src_theme_c_get_titlebar_height(struct theme *theme)
 }
 
 /* Blend foreground color (with new alpha) with background color */
-static void
+static void __attribute__((unused))
 LABWC_src_theme_c_blend_color_with_bg(float *dst, float *fg, float fg_a, float *bg)
 {
 	/* Guard against zero division */
@@ -27858,10 +24311,6 @@ LABWC_src_theme_c_blend_color_with_bg(float *dst, float *fg, float fg_a, float *
 static void
 LABWC_src_theme_c_post_processing(struct theme *theme)
 {
-	struct window_switcher_classic_theme *switcher_classic_theme =
-		&theme->osd_window_switcher_classic;
-	struct window_switcher_thumbnail_theme *switcher_thumb_theme =
-		&theme->osd_window_switcher_thumbnail;
 
 	theme->titlebar_height = LABWC_src_theme_c_get_titlebar_height(theme);
 
@@ -27874,16 +24323,7 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 	theme->menu_header_height = font_height(&rc.font_menuheader)
 		+ 2 * theme->menu_items_padding_y;
 
-	int osd_font_height = font_height(&rc.font_osd);
-	switcher_thumb_theme->title_height = osd_font_height;
-	if (switcher_classic_theme->item_icon_size <= 0) {
-		switcher_classic_theme->item_icon_size = osd_font_height;
-	}
-	int osd_field_height =
-		MAX(osd_font_height, switcher_classic_theme->item_icon_size);
-	switcher_classic_theme->item_height = osd_field_height
-		+ 2 * switcher_classic_theme->item_padding_y
-		+ 2 * switcher_classic_theme->item_active_border_width;
+	/* window switcher theme removed */
 
 	if (rc.corner_radius >= theme->titlebar_height) {
 		rc.corner_radius = theme->titlebar_height - 1;
@@ -27940,40 +24380,15 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 		memcpy(theme->osd_border_color, theme->osd_label_text_color,
 			sizeof(theme->osd_border_color));
 	}
-	if (switcher_classic_theme->item_active_border_color[0] == FLT_MIN) {
-		LABWC_src_theme_c_blend_color_with_bg(switcher_classic_theme->item_active_border_color,
-			theme->osd_label_text_color, 0.50, theme->osd_bg_color);
-	}
-	if (switcher_classic_theme->item_active_bg_color[0] == FLT_MIN) {
-		LABWC_src_theme_c_blend_color_with_bg(switcher_classic_theme->item_active_bg_color,
-			theme->osd_label_text_color, 0.15f, theme->osd_bg_color);
-	}
-	if (switcher_thumb_theme->item_active_border_color[0] == FLT_MIN) {
-		LABWC_src_theme_c_blend_color_with_bg(switcher_thumb_theme->item_active_border_color,
-			theme->osd_label_text_color, 0.50, theme->osd_bg_color);
-	}
-	if (switcher_thumb_theme->item_active_bg_color[0] == FLT_MIN) {
-		LABWC_src_theme_c_blend_color_with_bg(switcher_thumb_theme->item_active_bg_color,
-			theme->osd_label_text_color, 0.15f, theme->osd_bg_color);
-	}
+	/* window switcher theme removed */
 	if (theme->osd_workspace_switcher_boxes_width == 0) {
 		theme->osd_workspace_switcher_boxes_height = 0;
 	}
 	if (theme->osd_workspace_switcher_boxes_height == 0) {
 		theme->osd_workspace_switcher_boxes_width = 0;
 	}
-	if (switcher_classic_theme->width_is_percent) {
-		switcher_classic_theme->width =
-			MIN(switcher_classic_theme->width, 100);
-	}
-	if (theme->osd_window_switcher_preview_border_width == INT_MIN) {
-		theme->osd_window_switcher_preview_border_width =
-			theme->osd_border_width;
-	}
-	if (theme->osd_window_switcher_preview_border_color[0][0] == FLT_MIN) {
-		LABWC_src_theme_c_fill_colors_with_osd_theme(theme,
-			theme->osd_window_switcher_preview_border_color);
-	}
+	(void)theme; /* unused */
+
 
 	if (theme->snapping_overlay_region.border_width == INT_MIN) {
 		theme->snapping_overlay_region.border_width =
@@ -27984,12 +24399,14 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 			theme->osd_border_width;
 	}
 	if (theme->snapping_overlay_region.border_color[0][0] == FLT_MIN) {
-		LABWC_src_theme_c_fill_colors_with_osd_theme(theme,
-			theme->snapping_overlay_region.border_color);
+		memcpy(theme->snapping_overlay_region.border_color,
+			theme->osd_border_color,
+			sizeof(theme->snapping_overlay_region.border_color));
 	}
 	if (theme->snapping_overlay_edge.border_color[0][0] == FLT_MIN) {
-		LABWC_src_theme_c_fill_colors_with_osd_theme(theme,
-			theme->snapping_overlay_edge.border_color);
+		memcpy(theme->snapping_overlay_edge.border_color,
+			theme->osd_border_color,
+			sizeof(theme->snapping_overlay_edge.border_color));
 	}
 }
 
@@ -28861,11 +25278,7 @@ view_matches_criteria(struct view *view, enum lab_view_criteria criteria)
 			return false;
 		}
 	}
-	if (criteria & LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER) {
-		if (window_rules_get_property(view, "skipWindowSwitcher") == LAB_PROP_TRUE) {
-			return false;
-		}
-	}
+	/* skipWindowSwitcher ignored */
 	if (criteria & LAB_VIEW_CRITERIA_NO_OMNIPRESENT) {
 		if (view->visible_on_all_workspaces) {
 			return false;
@@ -29351,7 +25764,7 @@ view_minimize(struct view *view, bool minimized)
 	assert(view);
 	bool need_refocus = false;
 
-	if (server.input_mode == LAB_INPUT_STATE_CYCLE) {
+	if (false) {
 		return;
 	}
 
@@ -30981,29 +27394,6 @@ view_set_shade(struct view *view, bool shaded)
 }
 
 void
-view_set_icon(struct view *view, const char *icon_name, struct wl_array *buffers)
-{
-	/* Update icon name */
-	zfree(view->icon.name);
-	if (icon_name) {
-		view->icon.name = xstrdup(icon_name);
-	}
-
-	/* Update icon images */
-	struct lab_data_buffer **buffer;
-	wl_array_for_each(buffer, &view->icon.buffers) {
-		wlr_buffer_drop(&(*buffer)->base);
-	}
-	wl_array_release(&view->icon.buffers);
-	wl_array_init(&view->icon.buffers);
-	if (buffers) {
-		wl_array_copy(&view->icon.buffers, buffers);
-	}
-
-	wl_signal_emit_mutable(&view->events.set_icon, NULL);
-}
-
-void
 view_init(struct view *view)
 {
 	assert(view);
@@ -31016,7 +27406,6 @@ view_init(struct view *view)
 	wl_signal_init(&view->events.fullscreened);
 	wl_signal_init(&view->events.activated);
 	wl_signal_init(&view->events.always_on_top);
-	wl_signal_init(&view->events.set_icon);
 	wl_signal_init(&view->events.destroy);
 
 	view->title = xstrdup("");
@@ -31080,12 +27469,11 @@ view_destroy(struct view *view)
 	}
 
 	/* TODO: call this on map/unmap instead */
-	cycle_reinitialize();
+
 
 	LABWC_src_view_c_undecorate(view);
 
 	LABWC_src_view_c_clear_last_placement(view);
-	view_set_icon(view, NULL, NULL);
 	menu_on_view_destroy(view);
 
 	/*
@@ -31106,7 +27494,6 @@ view_destroy(struct view *view)
 	assert(wl_list_empty(&view->events.fullscreened.listener_list));
 	assert(wl_list_empty(&view->events.activated.listener_list));
 	assert(wl_list_empty(&view->events.always_on_top.listener_list));
-	assert(wl_list_empty(&view->events.set_icon.listener_list));
 	assert(wl_list_empty(&view->events.destroy.listener_list));
 
 	zfree(view->title);
@@ -31209,7 +27596,7 @@ window_rules_get_property(struct view *view, const char *property)
 			}
 			if (rule->skip_window_switcher
 					&& !strcasecmp(property, "skipWindowSwitcher")) {
-				return rule->skip_window_switcher;
+				return LAB_PROP_FALSE;
 			}
 			if (rule->ignore_focus_request
 					&& !strcasecmp(property, "ignoreFocusRequest")) {
@@ -31222,10 +27609,6 @@ window_rules_get_property(struct view *view, const char *property)
 			if (rule->fixed_position
 					&& !strcasecmp(property, "fixedPosition")) {
 				return rule->fixed_position;
-			}
-			if (rule->icon_prefer_client
-					&& !strcasecmp(property, "iconPreferClient")) {
-				return rule->icon_prefer_client;
 			}
 			if (rule->allow_always_on_top
 					&& !strcasecmp(property, "allowAlwaysOnTop")) {
@@ -32077,7 +28460,6 @@ xwayland_unmanaged_create(struct wlr_xwayland_surface *xsurface, bool mapped)
 #define handle_request_resize LABWC_src_xwayland_c_handle_request_resize
 #define handle_set_class LABWC_src_xwayland_c_handle_set_class
 #define handle_set_decorations LABWC_src_xwayland_c_handle_set_decorations
-#define handle_set_icon LABWC_src_xwayland_c_handle_set_icon
 #define handle_set_override_redirect LABWC_src_xwayland_c_handle_set_override_redirect
 #define handle_set_strut_partial LABWC_src_xwayland_c_handle_set_strut_partial
 #define handle_set_title LABWC_src_xwayland_c_handle_set_title
@@ -32501,7 +28883,6 @@ LABWC_src_xwayland_c_handle_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&xwayland_view->set_override_redirect.link);
 	wl_list_remove(&xwayland_view->set_strut_partial.link);
 	wl_list_remove(&xwayland_view->set_window_type.link);
-	wl_list_remove(&xwayland_view->set_icon.link);
 	wl_list_remove(&xwayland_view->focus_in.link);
 
 	wl_list_remove(&xwayland_view->on_view.always_on_top.link);
@@ -32718,52 +29099,6 @@ LABWC_src_xwayland_c_handle_set_strut_partial(struct wl_listener *listener, void
 	if (view->mapped) {
 		output_update_all_usable_areas(false);
 	}
-}
-
-static void
-LABWC_src_xwayland_c_handle_set_icon(struct wl_listener *listener, void *data)
-{
-	struct xwayland_view *xwayland_view =
-		wl_container_of(listener, xwayland_view, set_icon);
-
-	xcb_ewmh_get_wm_icon_reply_t icon_reply = {0};
-	if (!wlr_xwayland_surface_fetch_icon(xwayland_view->xwayland_surface,
-			&icon_reply)) {
-		view_set_icon(&xwayland_view->base, NULL, NULL);
-		goto out;
-	}
-
-	xcb_ewmh_wm_icon_iterator_t iter = xcb_ewmh_get_wm_icon_iterator(&icon_reply);
-	struct wl_array buffers;
-	wl_array_init(&buffers);
-	for (; iter.rem; xcb_ewmh_get_wm_icon_next(&iter)) {
-		size_t stride = iter.width * 4;
-		uint32_t *buf = xzalloc(iter.height * stride);
-
-		/* Pre-multiply alpha */
-		for (uint32_t y = 0; y < iter.height; y++) {
-			for (uint32_t x = 0; x < iter.width; x++) {
-				uint32_t i = x + y * iter.width;
-				uint8_t *src_pixel = (uint8_t *)&iter.data[i];
-				uint8_t *dst_pixel = (uint8_t *)&buf[i];
-				dst_pixel[0] = (uint8_t)(src_pixel[0] * src_pixel[3] / 255);
-				dst_pixel[1] = (uint8_t)(src_pixel[1] * src_pixel[3] / 255);
-				dst_pixel[2] = (uint8_t)(src_pixel[2] * src_pixel[3] / 255);
-				dst_pixel[3] = src_pixel[3];
-			}
-		}
-
-		struct lab_data_buffer *buffer = buffer_create_from_data(
-			buf, iter.width, iter.height, (uint32_t)stride);
-		array_add(&buffers, buffer);
-	}
-
-	/* view takes ownership of the buffers */
-	view_set_icon(&xwayland_view->base, NULL, &buffers);
-	wl_array_release(&buffers);
-
-out:
-	xcb_ewmh_get_wm_icon_reply_wipe(&icon_reply);
 }
 
 static void
@@ -33092,7 +29427,6 @@ xwayland_view_create(struct wlr_xwayland_surface *xsurface, bool mapped)
 	CONNECT_SIGNAL(xsurface, xwayland_view, set_override_redirect);
 	CONNECT_SIGNAL(xsurface, xwayland_view, set_strut_partial);
 	CONNECT_SIGNAL(xsurface, xwayland_view, set_window_type);
-	CONNECT_SIGNAL(xsurface, xwayland_view, set_icon);
 	CONNECT_SIGNAL(xsurface, xwayland_view, focus_in);
 
 	/* Events from the view itself */
@@ -33109,7 +29443,6 @@ xwayland_view_create(struct wlr_xwayland_surface *xsurface, bool mapped)
 		 */
 		LABWC_src_xwayland_c_handle_set_title(&view->set_title, NULL);
 		LABWC_src_xwayland_c_handle_set_class(&xwayland_view->set_class, NULL);
-		LABWC_src_xwayland_c_handle_set_icon(&xwayland_view->set_icon, NULL);
 	}
 	if (mapped) {
 		LABWC_src_xwayland_c_handle_map(&xwayland_view->base.mappable.map, NULL);
@@ -33387,7 +29720,6 @@ xwayland_flush(void)
 #undef handle_request_resize
 #undef handle_set_class
 #undef handle_set_decorations
-#undef handle_set_icon
 #undef handle_set_override_redirect
 #undef handle_set_strut_partial
 #undef handle_set_title
@@ -34644,36 +30976,6 @@ LABWC_src_xdg_c_handle_new_xdg_toplevel(struct wl_listener *listener, void *data
 	view->creation_id = server.next_view_creation_id++;
 }
 
-static void
-LABWC_src_xdg_c_handle_xdg_toplevel_icon_set_icon(struct wl_listener *listener, void *data)
-{
-	struct wlr_xdg_toplevel_icon_manager_v1_set_icon_event *event = data;
-	struct wlr_xdg_surface *xdg_surface = event->toplevel->base;
-	struct view *view = xdg_surface->data;
-	assert(view);
-
-	char *icon_name = NULL;
-	struct wl_array buffers;
-	wl_array_init(&buffers);
-
-	if (event->icon) {
-		icon_name = event->icon->name;
-
-		struct wlr_xdg_toplevel_icon_v1_buffer *icon_buffer;
-		wl_list_for_each(icon_buffer, &event->icon->buffers, link) {
-			struct lab_data_buffer *buffer =
-				buffer_create_from_wlr_buffer(icon_buffer->buffer);
-			if (buffer) {
-				array_add(&buffers, buffer);
-			}
-		}
-	}
-
-	/* view takes ownership of the buffers */
-	view_set_icon(view, icon_name, &buffers);
-	wl_array_release(&buffers);
-}
-
 void
 xdg_shell_init(void)
 {
@@ -34699,12 +31001,6 @@ xdg_shell_init(void)
 	wl_signal_add(&server.xdg_activation->events.new_token,
 		&server.xdg_activation_new_token);
 
-	server.xdg_toplevel_icon_manager = wlr_xdg_toplevel_icon_manager_v1_create(
-		server.wl_display, 1);
-	server.xdg_toplevel_icon_set_icon.notify = LABWC_src_xdg_c_handle_xdg_toplevel_icon_set_icon;
-	wl_signal_add(&server.xdg_toplevel_icon_manager->events.set_icon,
-		&server.xdg_toplevel_icon_set_icon);
-
 	wlr_xdg_wm_dialog_v1_create(server.wl_display, 1);
 }
 
@@ -34714,7 +31010,6 @@ xdg_shell_finish(void)
 	wl_list_remove(&server.new_xdg_toplevel.link);
 	wl_list_remove(&server.xdg_activation_request.link);
 	wl_list_remove(&server.xdg_activation_new_token.link);
-	wl_list_remove(&server.xdg_toplevel_icon_set_icon.link);
 }
 #undef handle_commit
 #undef handle_destroy
@@ -35247,8 +31542,6 @@ box_to_fbox(struct wlr_box *box)
 #include <strings.h>
 #include <unistd.h>
 
-#define ICON_SIZE (rc.theme->menu_item_height - 2 * rc.theme->menu_items_padding_y)
-
 static struct menuitem *LABWC_src_menu_menu_c_selected_item;
 
 /* TODO: split this whole file into parser.c and actions.c*/
@@ -35411,7 +31704,7 @@ LABWC_src_menu_menu_c_unescape_underscores(char *text)
 }
 
 static struct menuitem *
-LABWC_src_menu_menu_c_item_create(struct menu *menu, const char *text, const char *icon_name, bool show_arrow)
+LABWC_src_menu_menu_c_item_create(struct menu *menu, const char *text, bool show_arrow)
 {
 	assert(menu);
 	assert(text);
@@ -35424,13 +31717,6 @@ LABWC_src_menu_menu_c_item_create(struct menu *menu, const char *text, const cha
 	menuitem->arrow = show_arrow ? "›" : NULL;
 	LABWC_src_menu_menu_c_item_parse_accelerator(menuitem, text);
 	LABWC_src_menu_menu_c_unescape_underscores(menuitem->text);
-
-#if HAVE_LIBSFDO
-	if (rc.menu_show_icons && !string_null_or_empty(icon_name)) {
-		menuitem->icon_name = xstrdup(icon_name);
-		menu->has_icons = true;
-	}
-#endif
 
 	menuitem->native_width = font_width(&rc.font_menuitem, text);
 	if (menuitem->arrow) {
@@ -35453,17 +31739,11 @@ LABWC_src_menu_menu_c_item_create_scene_for_state(struct menuitem *item, float *
 	/* Tree to hold background and label buffers */
 	struct wlr_scene_tree *tree = lab_wlr_scene_tree_create(item->tree);
 
-	int icon_width = 0;
-	int icon_size = ICON_SIZE;
-	if (item->parent->has_icons) {
-		icon_width = theme->menu_items_padding_x + icon_size;
-	}
-
 	int bg_width = menu->size.width - 2 * theme->menu_border_width;
 	int arrow_width = item->arrow ?
 		font_width(&rc.font_menuitem, item->arrow) + theme->menu_items_padding_x : 0;
 	int label_max_width = bg_width - 2 * theme->menu_items_padding_x
-		- arrow_width - icon_width;
+		- arrow_width;
 
 	if (label_max_width <= 0) {
 		return tree;
@@ -35472,31 +31752,13 @@ LABWC_src_menu_menu_c_item_create_scene_for_state(struct menuitem *item, float *
 	/* Create background */
 	lab_wlr_scene_rect_create(tree, bg_width, theme->menu_item_height, bg_color);
 
-	/* Create icon */
-	bool show_app_icon = !strcmp(item->parent->id, "client-list-combined-menu")
-				&& item->client_list_view;
-	if (item->icon_name || show_app_icon) {
-		struct scaled_icon_buffer *icon_buffer = scaled_icon_buffer_create(
-			tree, icon_size, icon_size);
-		if (item->icon_name) {
-			/* icon set via <menu icon="..."> */
-			scaled_icon_buffer_set_icon_name(icon_buffer, item->icon_name);
-		} else if (show_app_icon) {
-			/* app icon in client-list-combined-menu */
-			scaled_icon_buffer_set_view(icon_buffer,
-				item->client_list_view);
-		}
-		wlr_scene_node_set_position(&icon_buffer->scene_buffer->node,
-			theme->menu_items_padding_x, theme->menu_items_padding_y);
-	}
-
 	/* Create label */
 	struct scaled_font_buffer *label_buffer = scaled_font_buffer_create(tree);
 	assert(label_buffer);
 	scaled_font_buffer_update_markup(label_buffer, item->text, label_max_width,
 		&rc.font_menuitem, text_color, bg_color, item->use_markup);
 	/* Vertically center and left-align label */
-	int x = theme->menu_items_padding_x + icon_width;
+	int x = theme->menu_items_padding_x;
 	int y = (theme->menu_item_height - label_buffer->height) / 2;
 	wlr_scene_node_set_position(&label_buffer->scene_buffer->node, x, y);
 
@@ -35706,9 +31968,6 @@ LABWC_src_menu_menu_c_menu_create_scene(struct menu *menu)
 		menu->size.width = MAX(menu->size.width, width);
 	}
 
-	if (menu->has_icons) {
-		menu->size.width += theme->menu_items_padding_x + ICON_SIZE;
-	}
 	menu->size.width = MAX(menu->size.width, theme->menu_min_width);
 	menu->size.width = MIN(menu->size.width, theme->menu_max_width);
 
@@ -35751,7 +32010,6 @@ LABWC_src_menu_menu_c_item_destroy(struct menuitem *item)
 		wlr_scene_node_destroy(&item->tree->node);
 	}
 	free(item->text);
-	free(item->icon_name);
 	free(item);
 }
 
@@ -35876,8 +32134,7 @@ LABWC_src_menu_menu_c_update_client_send_to_menu(void)
 		} else {
 			buf_add(&buf, workspace->name);
 		}
-		struct menuitem *item = LABWC_src_menu_menu_c_item_create(menu, buf.data,
-			NULL, /*show arrow*/ false);
+		struct menuitem *item = LABWC_src_menu_menu_c_item_create(menu, buf.data, /*show arrow*/ false);
 
 		struct action *action = LABWC_src_menu_menu_c_item_add_action(item, "SendToDesktop");
 		action_arg_add_str(action, "to", workspace->name);
@@ -35888,7 +32145,7 @@ LABWC_src_menu_menu_c_update_client_send_to_menu(void)
 
 	LABWC_src_menu_menu_c_separator_create(menu, "");
 	struct menuitem *item = LABWC_src_menu_menu_c_item_create(menu,
-		_("Always on Visible Workspace"), NULL, false);
+		"Always on Visible Workspace", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleOmnipresent");
 
 	LABWC_src_menu_menu_c_menu_create_scene(menu);
@@ -35936,16 +32193,15 @@ LABWC_src_menu_menu_c_update_client_list_combined_menu(void)
 				} else {
 					buf_add(&buffer, view->title);
 				}
-				item = LABWC_src_menu_menu_c_item_create(menu, buffer.data, NULL,
+				item = LABWC_src_menu_menu_c_item_create(menu, buffer.data,
 					/*show arrow*/ false);
 				item->client_list_view = view;
 				LABWC_src_menu_menu_c_item_add_action(item, "Focus");
 				LABWC_src_menu_menu_c_item_add_action(item, "Raise");
 				buf_clear(&buffer);
-				menu->has_icons = true;
 			}
 		}
-		item = LABWC_src_menu_menu_c_item_create(menu, _("Go there..."), NULL,
+		item = LABWC_src_menu_menu_c_item_create(menu, "Go there...",
 			/*show arrow*/ false);
 		struct action *action = LABWC_src_menu_menu_c_item_add_action(item, "GoToDesktop");
 		action_arg_add_str(action, "to", workspace->name);
@@ -35960,24 +32216,24 @@ LABWC_src_menu_menu_c_init_windowmenu(void)
 	struct menu *menu = LABWC_src_menu_menu_c_menu_create(NULL, "client-menu", "");
 	struct menuitem *item;
 
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Minimize"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Minimize", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "Iconify");
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Maximize"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Maximize", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleMaximize");
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Fullscreen"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Fullscreen", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleFullscreen");
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Roll Up/Down"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Roll Up/Down", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleShade");
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Decorations"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Decorations", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleDecorations");
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Always on Top"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Always on Top", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleAlwaysOnTop");
 
 	/* Workspace sub-menu */
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Workspace"), NULL, true);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Workspace", true);
 	item->submenu = menu_get_by_id("client-send-to-menu");
 
-	item = LABWC_src_menu_menu_c_item_create(menu, _("Close"), NULL, false);
+	item = LABWC_src_menu_menu_c_item_create(menu, "Close", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "Close");
 
 	if (wl_list_length(&rc.workspace_config.workspaces) == 1) {
@@ -35991,8 +32247,8 @@ menu_init(void)
 	wl_list_init(&server.menus);
 
 	/* Just create placeholder. Contents will be created when launched */
-	LABWC_src_menu_menu_c_menu_create(NULL, "client-list-combined-menu", _("Windows"));
-	LABWC_src_menu_menu_c_menu_create(NULL, "client-send-to-menu", _("Workspace"));
+	LABWC_src_menu_menu_c_menu_create(NULL, "client-list-combined-menu", "Windows");
+	LABWC_src_menu_menu_c_menu_create(NULL, "client-send-to-menu", "Workspace");
 
 	LABWC_src_menu_menu_c_init_windowmenu();
 	LABWC_src_menu_menu_c_validate();
@@ -36419,7 +32675,6 @@ menu_reconfigure(void)
 	server.menu_current = NULL;
 	menu_init();
 }
-#undef ICON_SIZE
 
 
 /* ===== source: src/interactive.c ===== */
@@ -37297,7 +33552,7 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 		wl_list_init(&rc.libinput_categories);
 		wl_list_init(&rc.workspace_config.workspaces);
 		wl_list_init(&rc.regions);
-		wl_list_init(&rc.window_switcher.osd.fields);
+		/* window switcher removed */
 		wl_list_init(&rc.window_rules);
 		}
 	has_run = true;
@@ -37356,15 +33611,7 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.snap_top_maximize = true;
 	rc.snap_tiling_events_mode = LAB_TILING_EVENTS_ALWAYS;
 
-	rc.window_switcher.osd.show = true;
-	rc.window_switcher.osd.style = CYCLE_OSD_STYLE_THUMBNAIL;
-	rc.window_switcher.osd.output_filter = CYCLE_OUTPUT_ALL;
-	rc.window_switcher.osd.thumbnail_label_format = xstrdup("%T");
-	rc.window_switcher.preview = true;
-	rc.window_switcher.outlines = true;
-	rc.window_switcher.unshade = true;
-	rc.window_switcher.workspace_filter = CYCLE_WORKSPACE_ALL;
-	rc.window_switcher.order = WINDOW_SWITCHER_ORDER_FOCUS;
+	/* window switcher removed */
 
 	rc.resize_indicator = LAB_RESIZE_INDICATOR_NEVER;
 	rc.resize_draw_contents = true;
@@ -37374,7 +33621,6 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.workspace_config.popuptime = INT_MIN;
 
 	rc.menu_ignore_button_release_period = 250;
-	rc.menu_show_icons = true;
 
 	LABWC_src_config_rcxml_c_fill_default_title_layout();
 }
@@ -37455,38 +33701,11 @@ LABWC_src_config_rcxml_c_load_default_mouse_bindings(void)
 }
 
 static void
-LABWC_src_config_rcxml_c_load_default_window_switcher_fields(void)
-{
-	static const struct {
-		enum cycle_osd_field_content content;
-		int width;
-	} fields[] = {
-#if HAVE_LIBSFDO
-		{ LAB_FIELD_ICON, 5 },
-		{ LAB_FIELD_DESKTOP_ENTRY_NAME, 30 },
-		{ LAB_FIELD_TITLE, 65 },
-#else
-		{ LAB_FIELD_DESKTOP_ENTRY_NAME, 30 },
-		{ LAB_FIELD_TITLE, 70 },
-#endif
-	};
-
-	for (size_t i = 0; i < ARRAY_SIZE(fields); i++) {
-		struct cycle_osd_field *field = znew(*field);
-		field->content = fields[i].content;
-		field->width = fields[i].width;
-		wl_list_append(&rc.window_switcher.osd.fields, &field->link);
-	}
-}
-
-static void
 LABWC_src_config_rcxml_c_post_processing(void)
 {
 	LABWC_src_config_rcxml_c_load_default_key_bindings();
 
 	LABWC_src_config_rcxml_c_load_default_mouse_bindings();
-
-	rc.fallback_app_icon_name = xstrdup("jtlabwc");
 
 	rc.font_activewindow.name = xstrdup("sans");
 	rc.font_inactivewindow.name = xstrdup("sans");
@@ -37509,7 +33728,7 @@ LABWC_src_config_rcxml_c_post_processing(void)
 
 	rc.workspace_config.popuptime = 1000;
 
-	LABWC_src_config_rcxml_c_load_default_window_switcher_fields();
+	/* window switcher OSD removed */
 }
 
 void
@@ -37527,10 +33746,8 @@ rcxml_finish(void)
 	zfree(rc.font_menuheader.name);
 	zfree(rc.font_menuitem.name);
 	zfree(rc.font_osd.name);
-	zfree(rc.icon_theme_name);
-	zfree(rc.fallback_app_icon_name);
 	zfree(rc.workspace_config.initial_workspace_name);
-	zfree(rc.window_switcher.osd.thumbnail_label_format);
+	/* window switcher removed */
 
 	rc.nr_title_buttons_left = 0;
 	rc.nr_title_buttons_right = 0;
@@ -37573,11 +33790,7 @@ rcxml_finish(void)
 
 	regions_destroy(NULL, &rc.regions);
 
-	struct cycle_osd_field *field, *field_tmp;
-	wl_list_for_each_safe(field, field_tmp, &rc.window_switcher.osd.fields, link) {
-		wl_list_remove(&field->link);
-		cycle_osd_field_free(field);
-	}
+	/* window switcher removed */
 }
 
 

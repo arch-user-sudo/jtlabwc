@@ -746,7 +746,7 @@ FN_RE = re.compile(r'^(?![A-Za-z_ \t\*]*\b(?:static|extern)\b)'
                    r'[A-Za-z0-9_ \t\*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{',
                    re.M)
 # file-scope, non-static object definitions
-VAR_RE = re.compile(r'^(?![A-Za-z_ \t\*]*\b(?:static|extern)\b)'
+VAR_RE = re.compile(r'^(?![ \t])(?![A-Za-z_ \t\*]*\b(?:static|extern)\b)'
                     r'[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*'
                     r'(?:\[[^\]\n]*\]\s*)?=(?!=)', re.M)
 
@@ -765,6 +765,16 @@ def build_units(paths):
         units[p] = ids
         for m in FN_RE.finditer(text):
             name = m.group(1)
+            # A name on an indented line is only a definition continuation
+            # when the previous line is the return type.  Without this check,
+            # indented macro loops such as `wl_list_for_each(...) {` look like
+            # definitions and make every file that uses them look reachable.
+            line_start = text.rfind('\n', 0, m.start()) + 1
+            if text[line_start] in ' \t':
+                prev_end = text.rfind('\n', 0, line_start - 1)
+                prev = text[prev_end + 1:line_start].strip()
+                if not prev or prev.endswith((';', '{', '}', ')', ',')):
+                    continue
             if name not in scan.KEYWORDS:
                 defs.setdefault(name, set()).add(p)
         for m in VAR_RE.finditer(text):
@@ -857,6 +867,21 @@ def closure(seeds, units, defs):
     return files
 
 
+def remove_unused_protocols(all_gen, kept_gen):
+    """Delete generated protocol files that pruning left unreachable."""
+    kept = set(kept_gen)
+    for path in all_gen:
+        if path in kept or not path.endswith('-protocol.c'):
+            continue
+        base = path[:-len('-protocol.c')]
+        for suffix in ('-protocol.c', '-protocol.h',
+                       '-client-protocol.h'):
+            try:
+                os.remove(base + suffix)
+            except FileNotFoundError:
+                pass
+
+
 def prune(candidates, gen_candidates, dirs, flags):
     """Iteratively drop sources and headers labwc cannot reach."""
     defs, units = build_units(candidates + gen_candidates)
@@ -939,7 +964,9 @@ def main():
     # 3. prune what jtl.c cannot reach
     total_src, total_gen = len(candidates), len(gen_c)
     if prune_enabled:
+        all_gen = list(gen_c)
         candidates, gen_c = prune(candidates, gen_c, dirs, flags)
+        remove_unused_protocols(all_gen, gen_c)
     pruned = (total_src + total_gen) - (len(candidates) + len(gen_c))
 
     # 4. headers, in dependency order

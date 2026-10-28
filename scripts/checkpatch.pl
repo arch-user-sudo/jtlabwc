@@ -5660,7 +5660,6 @@ sub process {
 			    $var !~ /^(?:xml\w+)/ &&
 			    $var !~ /^(?:GString|GError|GHashTable)/ &&
 			    $var !~ /^(?:__FreeBSD__)/ &&
-			    $var !~ /^(?:RsvgRectangle|RsvgHandle)/ &&
 			    $var !~ /^(?:CMUnitTest)/ &&
 			    $var !~ /^(?:XKB_KEY_XF86Switch_VT_1)/ &&
 

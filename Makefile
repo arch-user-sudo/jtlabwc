@@ -14,10 +14,13 @@ WLR_SRCS = $(shell find wlroots -type f \( -name '*.c' -o -name '*.h' -o -name '
 
 PKGS = wayland-server wayland-client xkbcommon libinput pixman-1 libdrm egl gbm glesv2 \
        lcms2 libudev libseat libdisplay-info libliftoff \
-       xcb xcb-dri3 xcb-present xcb-render xcb-renderutil xcb-shm xcb-xfixes \
-       xcb-xinput xcb-composite xcb-ewmh xcb-icccm xcb-res xcb-shape \
-       cairo pangocairo pango harfbuzz glib-2.0 librsvg-2.0 libpng \
-       libsfdo-icon libsfdo-desktop
+       cairo pangocairo pango harfbuzz glib-2.0
+
+# XCB is only needed by the XWayland and X11 backend paths.
+ifneq ($(XWAYLAND)$(X11_BACKEND),)
+PKGS += xcb xcb-dri3 xcb-present xcb-render xcb-renderutil xcb-shm xcb-xfixes \
+        xcb-xinput xcb-composite xcb-ewmh xcb-icccm xcb-res xcb-shape
+endif
 
 CFLAGS += $(XWAYLAND) $(FULLSCREEN_TEARING) $(shell $(PKG_CONFIG) --cflags $(PKGS)) -I. -Iamalgamate-build/include -Iwlroots/include -Ibuild/proto
 LDFLAGS += $(shell $(PKG_CONFIG) --libs $(PKGS)) -lm
