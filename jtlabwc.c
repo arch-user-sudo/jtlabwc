@@ -23742,8 +23742,8 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 
 	theme->window[SSD_ACTIVE].shadow_size = 60;
 	theme->window[SSD_INACTIVE].shadow_size = 40;
-	LABWC_src_theme_c_parse_hexstr("#00000060", theme->window[SSD_ACTIVE].shadow_color);
-	LABWC_src_theme_c_parse_hexstr("#00000040", theme->window[SSD_INACTIVE].shadow_color);
+	LABWC_src_theme_c_parse_hexstr("#000000", theme->window[SSD_ACTIVE].shadow_color);
+	LABWC_src_theme_c_parse_hexstr("#000000", theme->window[SSD_INACTIVE].shadow_color);
 
 	theme->menu_overlap_x = 0;
 	theme->menu_overlap_y = 0;
@@ -24129,16 +24129,13 @@ LABWC_src_theme_c_shadow_edge_gradient(struct lab_data_buffer *buffer,
  * from `start_color` at the top-left to clear at the opposite edge.
  *
  * If the window is translucent we don't want the shadow to be visible through
- * it.  For the bottom corners of the window this is easy, we just erase the
- * square of the buffer which will be behind the window.  For the top it's a
- * little more complicated because the titlebar can have rounded corners.
- * However, the titlebar itself is always opaque so we only have to erase the
- * L-shaped area of the buffer which can appear behind the non-titlebar part of
- * the window.
+ * it.  Erase the square of the buffer which will be behind the window.  This
+ * includes the area behind the titlebar, since the titlebar may itself be
+ * translucent.
  */
 static void
 LABWC_src_theme_c_shadow_corner_gradient(struct lab_data_buffer *buffer, int visible_size,
-	int total_size, int titlebar_height, float start_color[4])
+	int total_size, float start_color[4])
 {
 	if (!buffer) {
 		/* This type of shadow is disabled, do nothing */
@@ -24168,16 +24165,8 @@ LABWC_src_theme_c_shadow_corner_gradient(struct lab_data_buffer *buffer, int vis
 			double gauss_y = exp(-(y_norm * y_norm) / variance);
 			double alpha = gauss_x * gauss_y;
 
-			/*
-			 * Erase the L-shaped region which could be visible
-			 * through a transparent window but not obscured by the
-			 * titlebar. If inset is smaller than the titlebar
-			 * height then there's nothing to do, this is handled by
-			 * (inset - titlebar_height) being negative.
-			 */
-			bool in1 = x < inset && y < inset - titlebar_height;
-			bool in2 = x < inset - titlebar_height && y < inset;
-			if (in1 || in2) {
+			/* Erase the square which is behind the window */
+			if (x < inset && y < inset) {
 				alpha = 0.0;
 			}
 
@@ -24222,11 +24211,9 @@ LABWC_src_theme_c_create_shadow(struct theme *theme, enum ssd_active_state activ
 	LABWC_src_theme_c_shadow_edge_gradient(theme->window[active].shadow_edge, visible_size,
 		total_size, theme->window[active].shadow_color);
 	LABWC_src_theme_c_shadow_corner_gradient(theme->window[active].shadow_corner_top,
-		visible_size, total_size,
-		theme->titlebar_height, theme->window[active].shadow_color);
+		visible_size, total_size, theme->window[active].shadow_color);
 	LABWC_src_theme_c_shadow_corner_gradient(theme->window[active].shadow_corner_bottom,
-		visible_size, total_size, 0,
-		theme->window[active].shadow_color);
+		visible_size, total_size, theme->window[active].shadow_color);
 }
 
 static void
