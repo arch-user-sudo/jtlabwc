@@ -33552,7 +33552,7 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.hide_maximized_window_titlebar = false;
 	rc.ssd_keep_border = true;
 	rc.corner_radius = 8;
-	rc.shadows_enabled = true;
+	rc.shadows_enabled = false;
 	rc.shadows_on_tiled = false;
 
 	rc.gap = 0;
