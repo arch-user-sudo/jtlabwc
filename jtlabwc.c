@@ -6650,7 +6650,10 @@ static struct key_combos {
 	},{
 		.binding = "W-d",
 		.action = "ToggleShowDesktop",
-	}, 
+	}, {
+		.binding = "W-y",
+		.action = "ToggleFullscreen",
+	},
 
 
 	/*WORKPACES*/
