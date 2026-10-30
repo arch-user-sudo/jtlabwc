@@ -994,8 +994,6 @@ struct rcxml {
 
 	int corner_radius;
 	bool ssd_keep_border;
-	bool shadows_enabled;
-	bool shadows_on_tiled;
 	struct font font_activewindow;
 	struct font font_inactivewindow;
 	struct font font_menuheader;
@@ -1044,7 +1042,6 @@ struct rcxml {
 	int resize_minimum_area;
 
 	struct {
-		int popuptime;
 		char *initial_workspace_name;
 		struct wl_list workspaces;  /* struct workspace_config.link */
 	} workspace_config;
@@ -1472,10 +1469,6 @@ struct seat {
 	} focus_override;
 
 	struct wlr_pointer_constraint_v1 *current_constraint;
-
-	/* Used to hide the workspace OSD after switching workspaces */
-	struct wl_event_source *workspace_osd_timer;
-	bool workspace_osd_shown_by_modifier;
 
 	/* if set, views cannot receive focus */
 	struct wlr_layer_surface_v1 *focused_layer;
@@ -2003,7 +1996,6 @@ struct output {
 	struct wlr_scene_tree *layer_tree[LAB_NR_LAYERS];
 	struct wlr_scene_tree *layer_popup_tree;
 	struct wlr_scene_tree *session_lock_tree;
-	struct wlr_scene_buffer *workspace_osd;
 
 	/* In output-relative scene coordinates */
 	struct wlr_box usable_area;
@@ -2173,13 +2165,6 @@ enum ssd_active_state {
 
 struct wlr_cursor;
 
-/*
- * Shadows should start at a point inset from the actual window border, see
- * discussion on https://github.com/labwc/labwc/pull/1648.  This constant
- * specifies inset as a multiple of visible shadow size.
- */
-#define SSD_SHADOW_INSET 0.3
-
 /* Forward declare arguments */
 struct server;
 struct ssd;
@@ -2329,10 +2314,6 @@ struct theme {
 		float toggled_keybinds_color[4];
 		float label_text_color[4];
 
-		/* window drop-shadows */
-		int shadow_size;
-		float shadow_color[4];
-
 		/*
 		 * The texture of a window buttons for each hover/toggled/rounded
 		 * state. This can be accessed like:
@@ -2358,10 +2339,6 @@ struct theme {
 
 		struct lab_data_buffer *corner_top_left_normal;
 		struct lab_data_buffer *corner_top_right_normal;
-
-		struct lab_data_buffer *shadow_corner_top;
-		struct lab_data_buffer *shadow_corner_bottom;
-		struct lab_data_buffer *shadow_edge;
 	} window[2];
 
 	/* Derived from font sizes */
@@ -2396,14 +2373,6 @@ struct theme {
 	float osd_bg_color[4];
 	float osd_border_color[4];
 	float osd_label_text_color[4];
-
-
-
-
-
-	int osd_workspace_switcher_boxes_width;
-	int osd_workspace_switcher_boxes_height;
-	int osd_workspace_switcher_boxes_border_width;
 
 	struct theme_snapping_overlay
 		snapping_overlay_region, snapping_overlay_edge;
@@ -3076,7 +3045,6 @@ struct workspace {
 void workspaces_init(void);
 void workspaces_switch_to(struct workspace *target, bool update_focus);
 void workspaces_destroy(void);
-void workspaces_osd_hide(struct seat *seat);
 struct workspace *workspaces_find(struct workspace *anchor, const char *name,
 	bool wrap);
 
@@ -6355,13 +6323,6 @@ void snap_update_cache_geometry(struct view *view);
  * |  +--active
  * |     +--top
  * |     +--...
- * +--shadow
- * |  +--inactive
- * |  |  +--top
- * |  |  +--...
- * |  +--active
- * |     +--top
- * |     +--...
  * +--extents
  *    +--top
  *    +--...
@@ -6427,15 +6388,6 @@ struct ssd {
 		} subtrees[2]; /* indexed by enum ssd_active_state */
 	} border;
 
-	struct ssd_shadow_scene {
-		struct wlr_scene_tree *tree;
-		struct ssd_shadow_subtree {
-			struct wlr_scene_tree *tree;
-			struct wlr_scene_buffer *top, *bottom, *left, *right,
-				*top_left, *top_right, *bottom_left, *bottom_right;
-		} subtrees[2]; /* indexed by enum ssd_active_state */
-	} shadow;
-
 	/*
 	 * Space between the extremities of the view's wlr_surface
 	 * and the max extents of the server-side decorations.
@@ -6485,10 +6437,6 @@ void ssd_border_destroy(struct ssd *ssd);
 void ssd_extents_create(struct ssd *ssd);
 void ssd_extents_update(struct ssd *ssd);
 void ssd_extents_destroy(struct ssd *ssd);
-
-void ssd_shadow_create(struct ssd *ssd);
-void ssd_shadow_update(struct ssd *ssd);
-void ssd_shadow_destroy(struct ssd *ssd);
 
 #endif /* LABWC_SSD_INTERNAL_H */
 
@@ -6951,11 +6899,6 @@ static struct key_combos {
  *       <action name="ToggleMaximize" />
  *     </mousebind>
  *   </context>
- *   <context name="Root">
- *     <mousebind direction="Up" action="Scroll">
- *       <action name="GoToDesktop" to="left" wrap="yes" />
- *     </mousebind>
- *   </context>
  * </mouse>
  */
 static struct mouse_combos {
@@ -7139,24 +7082,6 @@ static struct mouse_combos {
 		.attributes[1] = {
 			.name = "atCursor",
 			.value = "no",
-		},
-	}, {
-		.context = "Root",
-		.button = "Up",
-		.event = "Scroll",
-		.action = "GoToDesktop",
-		.attributes[0] = {
-			.name = "to",
-			.value = "left",
-		},
-	}, {
-		.context = "Root",
-		.button = "Down",
-		.event = "Scroll",
-		.action = "GoToDesktop",
-		.attributes[0] = {
-			.name = "to",
-			.value = "right",
 		},
 	}, {
 		.context = "Client",
@@ -15134,9 +15059,8 @@ keyboard_get_all_modifiers(struct seat *seat)
 	 * we need to additionally get the modifiers of the virtual keyboards in addition
 	 * to the physical ones in the keyboard group. This ensures that mousebinds with
 	 * keyboard modifiers are detected correctly when using for example a VNC client
-	 * via wayvnc to control labwc. This function also gets called to decide when to
-	 * hide the window switcher and workspace OSDs and to indicate if the user wants
-	 * to snap a window to a region during a window move operation.
+	 * via wayvnc to control labwc. This function also gets called to indicate if
+	 * the user wants to snap a window to a region during a window move operation.
 	 */
 	struct input *input;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(&seat->keyboard_group->keyboard);
@@ -15209,23 +15133,6 @@ LABWC_src_input_keyboard_c_handle_modifiers(struct wl_listener *listener, void *
 		seat->region_prevent_snap = false;
 		/* Pressing/releasing modifier key may show/hide region overlay */
 		overlay_update(seat);
-	}
-
-	bool cycling = false;
-
-	if ((cycling || seat->workspace_osd_shown_by_modifier)
-			&& !keyboard_get_all_modifiers(seat)) {
-		if (cycling) {
-			if (key_state_nr_bound_keys()) {
-				LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release = true;
-			} else {
-				LABWC_src_input_keyboard_c_should_cancel_cycling_on_next_key_release = false;
-
-			}
-		}
-		if (seat->workspace_osd_shown_by_modifier) {
-			workspaces_osd_hide(seat);
-		}
 	}
 
 	if (!input_method_keyboard_grab_forward_modifiers(keyboard)) {
@@ -17222,10 +17129,6 @@ LABWC_src_output_c_handle_output_destroy(struct wl_listener *listener, void *dat
 	wlr_scene_node_destroy(&output->layer_popup_tree->node);
 
 	wlr_scene_node_destroy(&output->session_lock_tree->node);
-	if (output->workspace_osd) {
-		wlr_scene_node_destroy(&output->workspace_osd->node);
-		output->workspace_osd = NULL;
-	}
 
 	struct view *view;
 	wl_list_for_each(view, &server.views, link) {
@@ -19790,10 +19693,6 @@ seat_finish(void)
 		LABWC_src_seat_c_input_device_destroy(&input->destroy, NULL);
 	}
 
-	if (seat->workspace_osd_timer) {
-		wl_event_source_remove(seat->workspace_osd_timer);
-		seat->workspace_osd_timer = NULL;
-	}
 	overlay_finish(seat);
 
 	input_handlers_finish(seat);
@@ -22246,285 +22145,6 @@ ssd_extents_destroy(struct ssd *ssd)
 }
 
 
-/* ===== source: src/ssd/ssd-shadow.c ===== */
-// SPDX-License-Identifier: GPL-2.0-only
-
-#include <assert.h>
-
-/*
- * Implements point_accepts_input for a buffer which never accepts input
- * because drop-shadows should never catch clicks!
- */
-static bool
-LABWC_src_ssd_ssd_shadow_c_never_accepts_input(struct wlr_scene_buffer *buffer, double *sx, double *sy)
-{
-	return false;
-}
-
-/*
- * Setup transform and scale for shadow corner buffers. Cropping is applied if
- * the window is short or narrow enough that corners would overlap, the amount
- * to crop is controlled by vertical_overlap and horizontal_overlap.
- */
-static void
-LABWC_src_ssd_ssd_shadow_c_corner_scale_crop(struct wlr_scene_buffer *buffer, int horizontal_overlap,
-		int vertical_overlap, int corner_size)
-{
-	int width = MAX(corner_size - horizontal_overlap, 0);
-	int height = MAX(corner_size - vertical_overlap, 0);
-	struct wlr_fbox src_box = {
-		.x = horizontal_overlap,
-		.y = vertical_overlap,
-		.width = width,
-		.height = height,
-	};
-	wlr_scene_buffer_set_source_box(buffer, &src_box);
-	wlr_scene_buffer_set_dest_size(buffer, width, height);
-}
-
-/*
- * Set the position, scaling, and visibility for a single part of a window
- * drop-shadow.
- */
-static void
-LABWC_src_ssd_ssd_shadow_c_set_shadow_parts_geometry(struct ssd_shadow_subtree *subtree,
-		int width, int height, int titlebar_height, int corner_size,
-		int inset, int visible_shadow_width)
-{
-	/*
-	 * If the shadow inset is greater than half the overall window height
-	 * or width (eg. because the window is shaded or because we have a
-	 * small window with massive shadows) then the corners would overlap
-	 * which looks horrible.  To avoid this, when the window is too narrow
-	 * or short we hide the edges on that axis and clip off the portion of
-	 * the corners which would overlap.  This does produce slight
-	 * aberrations in the shadow shape where corners meet but it's not too
-	 * noticeable.
-	 */
-	bool show_topbottom = width > inset * 2;
-	bool show_sides = height > inset * 2;
-	/* These values are the overlap on each corner (half total overlap) */
-	int horizontal_overlap = MAX(0, inset - width / 2);
-	int vertical_overlap = MAX(0, inset - height / 2);
-
-	/*
-	 * If window width or height is odd then making the corners equally
-	 * sized when the edge is hidden would leave a single pixel gap
-	 * between the corners. Showing a single pixel edge between clipped
-	 * corners looks bad because the edge-piece doesn't match up with the
-	 * corners after the corners are clipped. So fill the gap by making
-	 * the top-left and bottom-right corners one pixel wider (if the width
-	 * is odd) or taller (if the height is odd).
-	 */
-	int horizontal_overlap_downsized = horizontal_overlap;
-	if (horizontal_overlap > 0) {
-		horizontal_overlap_downsized -= width % 2;
-	}
-	int vertical_overlap_downsized = vertical_overlap;
-	if (vertical_overlap > 0) {
-		vertical_overlap_downsized -= height % 2;
-	}
-
-	int x;
-	int y;
-
-	x = width - inset + horizontal_overlap_downsized;
-	y = -titlebar_height + height - inset + vertical_overlap_downsized;
-	wlr_scene_node_set_position(&subtree->bottom_right->node, x, y);
-	LABWC_src_ssd_ssd_shadow_c_corner_scale_crop(subtree->bottom_right, horizontal_overlap_downsized,
-		vertical_overlap_downsized, corner_size);
-
-	x = -visible_shadow_width;
-	y = -titlebar_height + height - inset + vertical_overlap;
-	wlr_scene_node_set_position(&subtree->bottom_left->node, x, y);
-	LABWC_src_ssd_ssd_shadow_c_corner_scale_crop(subtree->bottom_left, horizontal_overlap,
-		vertical_overlap, corner_size);
-
-	x = -visible_shadow_width;
-	y = -titlebar_height - visible_shadow_width;
-	wlr_scene_node_set_position(&subtree->top_left->node, x, y);
-	LABWC_src_ssd_ssd_shadow_c_corner_scale_crop(subtree->top_left, horizontal_overlap_downsized,
-		vertical_overlap_downsized, corner_size);
-
-	x = width - inset + horizontal_overlap;
-	y = -titlebar_height - visible_shadow_width;
-	wlr_scene_node_set_position(&subtree->top_right->node, x, y);
-	LABWC_src_ssd_ssd_shadow_c_corner_scale_crop(subtree->top_right, horizontal_overlap,
-		vertical_overlap, corner_size);
-
-	x = width;
-	y = -titlebar_height + inset;
-	wlr_scene_node_set_position(&subtree->right->node, x, y);
-	wlr_scene_buffer_set_dest_size(subtree->right,
-		visible_shadow_width, MAX(height - 2 * inset, 0));
-	wlr_scene_node_set_enabled(&subtree->right->node, show_sides);
-
-	x = inset;
-	y = -titlebar_height + height;
-	wlr_scene_node_set_position(&subtree->bottom->node, x, y);
-	wlr_scene_buffer_set_dest_size(subtree->bottom,
-		MAX(width - 2 * inset, 0), visible_shadow_width);
-	wlr_scene_node_set_enabled(&subtree->bottom->node, show_topbottom);
-
-	x = -visible_shadow_width;
-	y = -titlebar_height + inset;
-	wlr_scene_node_set_position(&subtree->left->node, x, y);
-	wlr_scene_buffer_set_dest_size(subtree->left,
-		visible_shadow_width, MAX(height - 2 * inset, 0));
-	wlr_scene_node_set_enabled(&subtree->left->node, show_sides);
-
-	x = inset;
-	y = -titlebar_height - visible_shadow_width;
-	wlr_scene_node_set_position(&subtree->top->node, x, y);
-	wlr_scene_buffer_set_dest_size(subtree->top,
-		MAX(width - 2 * inset, 0), visible_shadow_width);
-	wlr_scene_node_set_enabled(&subtree->top->node, show_topbottom);
-}
-
-static void
-LABWC_src_ssd_ssd_shadow_c_set_shadow_geometry(struct ssd *ssd)
-{
-	struct view *view = ssd->view;
-	struct theme *theme = rc.theme;
-	int titlebar_height = ssd->titlebar.height;
-	int width = view->current.width;
-	int height = view_effective_height(view, false) + titlebar_height;
-
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_shadow_subtree *subtree = &ssd->shadow.subtrees[active];
-		if (!subtree->tree) {
-			/* Looks like this type of shadow is disabled */
-			continue;
-		}
-
-		int visible_shadow_width = theme->window[active].shadow_size;
-		/* inset as a proportion of shadow width */
-		double inset_proportion = SSD_SHADOW_INSET;
-		/* inset in actual pixels */
-		int inset = (int)(inset_proportion * (double)visible_shadow_width);
-
-		/*
-		 * Total size of corner buffers including inset and visible
-		 * portion.  Top and bottom are the same size (only the cutout
-		 * is different).  The buffers are square so width == height.
-		 */
-		int corner_size = (int)theme->window[active]
-			.shadow_corner_top->logical_height;
-
-		LABWC_src_ssd_ssd_shadow_c_set_shadow_parts_geometry(subtree, width, height,
-			titlebar_height, corner_size, inset,
-			visible_shadow_width);
-	}
-}
-
-static struct wlr_scene_buffer *
-LABWC_src_ssd_ssd_shadow_c_make_shadow(struct view *view,
-	struct wlr_scene_tree *parent, struct wlr_buffer *buf,
-	enum wl_output_transform tx)
-{
-	struct wlr_scene_buffer *scene_buf =
-		lab_wlr_scene_buffer_create(parent, buf);
-	wlr_scene_buffer_set_transform(scene_buf, tx);
-	scene_buf->point_accepts_input = LABWC_src_ssd_ssd_shadow_c_never_accepts_input;
-	/*
-	 * Pixman has odd behaviour with bilinear filtering on buffers only one
-	 * pixel wide/tall. Use nearest-neighbour scaling to workaround.
-	 */
-	scene_buf->filter_mode = WLR_SCALE_FILTER_NEAREST;
-	return scene_buf;
-}
-
-void
-ssd_shadow_create(struct ssd *ssd)
-{
-	assert(ssd);
-	assert(!ssd->shadow.tree);
-
-	ssd->shadow.tree = lab_wlr_scene_tree_create(ssd->tree);
-
-	struct theme *theme = rc.theme;
-	struct view *view = ssd->view;
-
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_shadow_subtree *subtree = &ssd->shadow.subtrees[active];
-
-		if (!rc.shadows_enabled) {
-			/* Shadows are globally disabled */
-			continue;
-		}
-		if (theme->window[active].shadow_size == 0) {
-			/* Window shadows are disabled */
-			continue;
-		}
-
-		subtree->tree = lab_wlr_scene_tree_create(ssd->shadow.tree);
-		struct wlr_scene_tree *parent = subtree->tree;
-		struct wlr_buffer *corner_top_buffer =
-			&theme->window[active].shadow_corner_top->base;
-		struct wlr_buffer *corner_bottom_buffer =
-			&theme->window[active].shadow_corner_bottom->base;
-		struct wlr_buffer *edge_buffer =
-			&theme->window[active].shadow_edge->base;
-
-		subtree->bottom_right = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			corner_bottom_buffer, WL_OUTPUT_TRANSFORM_NORMAL);
-		subtree->bottom_left = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			corner_bottom_buffer, WL_OUTPUT_TRANSFORM_FLIPPED);
-		subtree->top_left = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			corner_top_buffer, WL_OUTPUT_TRANSFORM_180);
-		subtree->top_right = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			corner_top_buffer, WL_OUTPUT_TRANSFORM_FLIPPED_180);
-		subtree->right = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			edge_buffer, WL_OUTPUT_TRANSFORM_NORMAL);
-		subtree->bottom = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			edge_buffer, WL_OUTPUT_TRANSFORM_90);
-		subtree->left = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			edge_buffer, WL_OUTPUT_TRANSFORM_180);
-		subtree->top = LABWC_src_ssd_ssd_shadow_c_make_shadow(view, parent,
-			edge_buffer, WL_OUTPUT_TRANSFORM_270);
-	}
-
-	ssd_shadow_update(ssd);
-}
-
-void
-ssd_shadow_update(struct ssd *ssd)
-{
-	assert(ssd);
-	assert(ssd->shadow.tree);
-
-	struct view *view = ssd->view;
-	struct theme *theme = rc.theme;
-	bool maximized = view->maximized == VIEW_AXIS_BOTH;
-	bool tiled_shadows = false;
-	if (rc.shadows_on_tiled) {
-		if (rc.gap >= theme->window[SSD_ACTIVE].shadow_size
-				&& rc.gap >= theme->window[SSD_INACTIVE].shadow_size) {
-			tiled_shadows = true;
-		} else {
-		}
-	};
-	bool show_shadows = rc.shadows_enabled && !maximized
-		&& (!view_is_tiled(ssd->view) || tiled_shadows);
-	wlr_scene_node_set_enabled(&ssd->shadow.tree->node, show_shadows);
-	if (show_shadows) {
-		LABWC_src_ssd_ssd_shadow_c_set_shadow_geometry(ssd);
-	}
-}
-
-void
-ssd_shadow_destroy(struct ssd *ssd)
-{
-	assert(ssd);
-	assert(ssd->shadow.tree);
-
-	wlr_scene_node_destroy(&ssd->shadow.tree->node);
-	ssd->shadow = (struct ssd_shadow_scene){0};
-}
-
-
 /* ===== source: src/ssd/ssd-titlebar.c ===== */
 // SPDX-License-Identifier: GPL-2.0-only
 
@@ -23035,7 +22655,6 @@ ssd_create(struct view *view, bool active)
 
 	wlr_scene_node_lower_to_bottom(&ssd->tree->node);
 	ssd->titlebar.height = rc.theme->titlebar_height;
-	ssd_shadow_create(ssd);
 	ssd_extents_create(ssd);
 	/*
 	 * We need to create the borders after the titlebar because it sets
@@ -23120,7 +22739,6 @@ ssd_update_geometry(struct ssd *ssd)
 	if (update_area || state_changed) {
 		ssd_titlebar_update(ssd);
 		ssd_border_update(ssd);
-		ssd_shadow_update(ssd);
 	}
 
 	if (update_extents) {
@@ -23138,7 +22756,6 @@ ssd_set_titlebar(struct ssd *ssd, bool enabled)
 	ssd->titlebar.height = enabled ? rc.theme->titlebar_height : 0;
 	ssd_border_update(ssd);
 	ssd_extents_update(ssd);
-	ssd_shadow_update(ssd);
 	ssd->margin = ssd_thickness(ssd->view);
 }
 
@@ -23160,7 +22777,6 @@ ssd_destroy(struct ssd *ssd)
 	ssd_titlebar_destroy(ssd);
 	ssd_border_destroy(ssd);
 	ssd_extents_destroy(ssd);
-	ssd_shadow_destroy(ssd);
 	wlr_scene_node_destroy(&ssd->tree->node);
 
 	free(ssd);
@@ -23197,11 +22813,6 @@ ssd_set_active(struct ssd *ssd, bool active)
 		wlr_scene_node_set_enabled(
 			&ssd->titlebar.subtrees[active_state].tree->node,
 			active == active_state);
-		if (ssd->shadow.subtrees[active_state].tree) {
-			wlr_scene_node_set_enabled(
-				&ssd->shadow.subtrees[active_state].tree->node,
-				active == active_state);
-		}
 	}
 }
 
@@ -23214,7 +22825,6 @@ ssd_enable_shade(struct ssd *ssd, bool enable)
 	ssd_titlebar_update(ssd);
 	ssd_border_update(ssd);
 	wlr_scene_node_set_enabled(&ssd->extents.tree->node, !enable);
-	ssd_shadow_update(ssd);
 }
 
 void
@@ -23743,11 +23353,6 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 			theme->window[SSD_ACTIVE].button_colors[type]);
 	}
 
-	theme->window[SSD_ACTIVE].shadow_size = 60;
-	theme->window[SSD_INACTIVE].shadow_size = 40;
-	LABWC_src_theme_c_parse_hexstr("#000000", theme->window[SSD_ACTIVE].shadow_color);
-	LABWC_src_theme_c_parse_hexstr("#000000", theme->window[SSD_INACTIVE].shadow_color);
-
 	theme->menu_overlap_x = 0;
 	theme->menu_overlap_y = 0;
 	theme->menu_min_width = 20;
@@ -23772,13 +23377,6 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_title_text_color);
 
 
-
-	/* inherit settings in post_processing() if not set elsewhere */
-
-
-	theme->osd_workspace_switcher_boxes_width = 20;
-	theme->osd_workspace_switcher_boxes_height = 20;
-	theme->osd_workspace_switcher_boxes_border_width = 2;
 
 	/* inherit settings in post_processing() if not set elsewhere */
 	LABWC_src_theme_c_parse_hexstr("#030303", theme->osd_bg_color);
@@ -24079,153 +23677,6 @@ LABWC_src_theme_c_create_corners(struct theme *theme)
 	}
 }
 
-/*
- * Draw the buffer used to render the edges of window drop-shadows. The buffer
- * is 1 pixel tall and `visible_size` pixels wide and can be rotated and scaled for the
- * different edges.  The buffer is drawn as would be found at the right-hand
- * edge of a window. The gradient has a color of `start_color` at its left edge
- * fading to clear at its right edge.
- */
-static void
-LABWC_src_theme_c_shadow_edge_gradient(struct lab_data_buffer *buffer,
-		int visible_size, int total_size, float start_color[4])
-{
-	if (!buffer) {
-		/* This type of shadow is disabled, do nothing */
-		return;
-	}
-
-	assert(buffer->format == DRM_FORMAT_ARGB8888);
-	uint8_t *pixels = buffer->data;
-
-	/* Inset portion which is obscured */
-	int inset = total_size - visible_size;
-
-	/* Standard deviation normalised against the shadow width, squared */
-	double variance = 0.3 * 0.3;
-
-	for (int x = 0; x < visible_size; x++) {
-		/*
-		 * x normalised against total shadow width. We add on inset here
-		 * because we don't bother drawing inset for the edge shadow
-		 * buffers but still need the pattern to line up with the corner
-		 * shadow buffers which do have inset drawn.
-		 */
-		double xn = (double)(x + inset) / (double)total_size;
-
-		/* Gaussian dropoff */
-		double alpha = exp(-(xn * xn) / variance);
-
-		/* RGBA values are all pre-multiplied */
-		pixels[4 * x] = (uint8_t)(start_color[2] * alpha * 255);
-		pixels[4 * x + 1] = (uint8_t)(start_color[1] * alpha * 255);
-		pixels[4 * x + 2] = (uint8_t)(start_color[0] * alpha * 255);
-		pixels[4 * x + 3] = (uint8_t)(start_color[3] * alpha * 255);
-	}
-}
-
-/*
- * Draw the buffer used to render the corners of window drop-shadows.  The
- * shadow looks better if the buffer is inset behind the window, so the buffer
- * is square with a size of radius+inset.  The buffer is drawn for the
- * bottom-right corner but can be rotated for other corners.  The gradient fades
- * from `start_color` at the top-left to clear at the opposite edge.
- *
- * If the window is translucent we don't want the shadow to be visible through
- * it.  Erase the square of the buffer which will be behind the window.  This
- * includes the area behind the titlebar, since the titlebar may itself be
- * translucent.
- */
-static void
-LABWC_src_theme_c_shadow_corner_gradient(struct lab_data_buffer *buffer, int visible_size,
-	int total_size, float start_color[4])
-{
-	if (!buffer) {
-		/* This type of shadow is disabled, do nothing */
-		return;
-	}
-
-	assert(buffer->format == DRM_FORMAT_ARGB8888);
-	uint8_t *pixels = buffer->data;
-
-	/* Standard deviation normalised against the shadow width, squared */
-	double variance = 0.3 * 0.3;
-
-	int inset = total_size - visible_size;
-
-	for (int y = 0; y < total_size; y++) {
-		uint8_t *pixel_row = &pixels[(size_t)y * buffer->stride];
-		for (int x = 0; x < total_size; x++) {
-			/* x and y normalised against total shadow width */
-			double x_norm = (double)(x) / (double)total_size;
-			double y_norm = (double)(y) / (double)total_size;
-			/*
-			 * For Gaussian drop-off in 2d you can just calculate
-			 * the outer product of the horizontal and vertical
-			 * profiles.
-			 */
-			double gauss_x = exp(-(x_norm * x_norm) / variance);
-			double gauss_y = exp(-(y_norm * y_norm) / variance);
-			double alpha = gauss_x * gauss_y;
-
-			/* Erase the square which is behind the window */
-			if (x < inset && y < inset) {
-				alpha = 0.0;
-			}
-
-			/* RGBA values are all pre-multiplied */
-			pixel_row[4 * x] = (uint8_t)(start_color[2] * alpha * 255);
-			pixel_row[4 * x + 1] = (uint8_t)(start_color[1] * alpha * 255);
-			pixel_row[4 * x + 2] = (uint8_t)(start_color[0] * alpha * 255);
-			pixel_row[4 * x + 3] = (uint8_t)(start_color[3] * alpha * 255);
-		}
-	}
-}
-
-static void
-LABWC_src_theme_c_create_shadow(struct theme *theme, enum ssd_active_state active)
-{
-	/* Size of shadow visible extending beyond the window */
-	int visible_size = theme->window[active].shadow_size;
-	/* How far inside the window the shadow inset begins */
-	int inset = (int)((double)visible_size * SSD_SHADOW_INSET);
-	/* Total width including visible and obscured portion */
-	int total_size = visible_size + inset;
-
-	/*
-	 * Edge shadows don't need to be inset so the buffers are sized just for
-	 * the visible width.  Corners are inset so the buffers are larger for
-	 * this.
-	 */
-	if (visible_size > 0) {
-		theme->window[active].shadow_edge = buffer_create_cairo(
-			(uint32_t)visible_size, 1, 1.0);
-		theme->window[active].shadow_corner_top = buffer_create_cairo(
-			(uint32_t)total_size, (uint32_t)total_size, 1.0);
-		theme->window[active].shadow_corner_bottom = buffer_create_cairo(
-			(uint32_t)total_size, (uint32_t)total_size, 1.0);
-		if (!theme->window[active].shadow_corner_top
-				|| !theme->window[active].shadow_corner_bottom
-				|| !theme->window[active].shadow_edge) {
-			return;
-		}
-	}
-
-	LABWC_src_theme_c_shadow_edge_gradient(theme->window[active].shadow_edge, visible_size,
-		total_size, theme->window[active].shadow_color);
-	LABWC_src_theme_c_shadow_corner_gradient(theme->window[active].shadow_corner_top,
-		visible_size, total_size, theme->window[active].shadow_color);
-	LABWC_src_theme_c_shadow_corner_gradient(theme->window[active].shadow_corner_bottom,
-		visible_size, total_size, theme->window[active].shadow_color);
-}
-
-static void
-LABWC_src_theme_c_create_shadows(struct theme *theme)
-{
-	LABWC_src_theme_c_create_shadow(theme, SSD_INACTIVE);
-	LABWC_src_theme_c_create_shadow(theme, SSD_ACTIVE);
-}
-
 static void
 LABWC_src_theme_c_copy_color_scaled(float dest[4], const float src[4], float scale)
 {
@@ -24371,12 +23822,6 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 			sizeof(theme->osd_border_color));
 	}
 	/* window switcher theme removed */
-	if (theme->osd_workspace_switcher_boxes_width == 0) {
-		theme->osd_workspace_switcher_boxes_height = 0;
-	}
-	if (theme->osd_workspace_switcher_boxes_height == 0) {
-		theme->osd_workspace_switcher_boxes_width = 0;
-	}
 	(void)theme; /* unused */
 
 
@@ -24416,7 +23861,6 @@ theme_init(struct theme *theme)
 	LABWC_src_theme_c_create_backgrounds(theme);
 	LABWC_src_theme_c_create_corners(theme);
 	LABWC_src_theme_c_load_buttons(theme);
-	LABWC_src_theme_c_create_shadows(theme);
 }
 
 static void LABWC_src_theme_c_destroy_img(struct lab_img **img)
@@ -24445,9 +23889,6 @@ theme_finish(struct theme *theme)
 		LABWC_src_theme_c_zdrop(&theme->window[active].titlebar_fill);
 		LABWC_src_theme_c_zdrop(&theme->window[active].corner_top_left_normal);
 		LABWC_src_theme_c_zdrop(&theme->window[active].corner_top_right_normal);
-		LABWC_src_theme_c_zdrop(&theme->window[active].shadow_corner_top);
-		LABWC_src_theme_c_zdrop(&theme->window[active].shadow_corner_bottom);
-		LABWC_src_theme_c_zdrop(&theme->window[active].shadow_edge);
 	}
 }
 #undef zero_array
@@ -27613,8 +27054,6 @@ window_rules_get_property(struct view *view, const char *property)
 /* ===== source: src/workspaces.c ===== */
 // SPDX-License-Identifier: GPL-2.0-only
 #include <assert.h>
-#include <cairo.h>
-#include <pango/pangocairo.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27653,127 +27092,6 @@ LABWC_src_workspaces_c_parse_workspace_index(const char *name)
 		return 0;
 	}
 	return (size_t)index;
-}
-
-static void
-LABWC_src_workspaces_c__osd_update(void)
-{
-	struct theme *theme = rc.theme;
-
-	/* Settings */
-	uint16_t margin = 10;
-	uint16_t padding = 2;
-	uint16_t rect_height = (uint16_t)theme->osd_workspace_switcher_boxes_height;
-	uint16_t rect_width = (uint16_t)theme->osd_workspace_switcher_boxes_width;
-	bool hide_boxes = theme->osd_workspace_switcher_boxes_width == 0 ||
-		theme->osd_workspace_switcher_boxes_height == 0;
-
-	/* Dimensions */
-	size_t workspace_count = (size_t)wl_list_length(&server.workspaces.all);
-	uint16_t marker_width = (uint16_t)(workspace_count * (rect_width + padding) - padding);
-	uint16_t width = (uint16_t)(margin * 2 + (marker_width < 200 ? 200 : marker_width));
-	uint16_t height = (uint16_t)(margin * (hide_boxes ? 2 : 3) + rect_height + font_height(&rc.font_osd));
-
-	cairo_t *cairo;
-	cairo_surface_t *surface;
-	struct workspace *workspace;
-
-	struct output *output;
-	wl_list_for_each(output, &server.outputs, link) {
-		if (!output_is_usable(output)) {
-			continue;
-		}
-		struct lab_data_buffer *buffer = buffer_create_cairo(width, height,
-			output->wlr_output->scale);
-		if (!buffer) {
-			continue;
-		}
-
-		cairo = cairo_create(buffer->surface);
-
-		/* Background */
-		set_cairo_color(cairo, theme->osd_bg_color);
-		cairo_rectangle(cairo, 0, 0, width, height);
-		cairo_fill(cairo);
-
-		/* Border */
-		set_cairo_color(cairo, theme->osd_border_color);
-		struct wlr_fbox border_fbox = {
-			.width = width,
-			.height = height,
-		};
-		draw_cairo_border(cairo, border_fbox, theme->osd_border_width);
-
-		/* Boxes */
-		uint16_t x;
-		if (!hide_boxes) {
-			x = (uint16_t)((width - marker_width) / 2);
-			wl_list_for_each(workspace, &server.workspaces.all, link) {
-				bool active = workspace == server.workspaces.current;
-				set_cairo_color(cairo, rc.theme->osd_label_text_color);
-				struct wlr_fbox fbox = {
-					.x = x,
-					.y = margin,
-					.width = rect_width,
-					.height = rect_height,
-				};
-				draw_cairo_border(cairo, fbox,
-					theme->osd_workspace_switcher_boxes_border_width);
-				if (active) {
-					cairo_rectangle(cairo, x, margin,
-						rect_width, rect_height);
-					cairo_fill(cairo);
-				}
-				x += (uint16_t)(rect_width + padding);
-			}
-		}
-
-		/* Text */
-		set_cairo_color(cairo, rc.theme->osd_label_text_color);
-		PangoLayout *layout = pango_cairo_create_layout(cairo);
-		pango_context_set_round_glyph_positions(pango_layout_get_context(layout), false);
-		pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-
-		/* Center workspace indicator on the x axis */
-		int req_width = font_width(&rc.font_osd, server.workspaces.current->name);
-		req_width = MIN(req_width, width - 2 * margin);
-		x = (uint16_t)((width - req_width) / 2);
-		if (!hide_boxes) {
-			cairo_move_to(cairo, x, margin * 2 + rect_height);
-		} else {
-			cairo_move_to(cairo, x, (height - font_height(&rc.font_osd)) / 2.0);
-		}
-		PangoFontDescription *desc = font_to_pango_desc(&rc.font_osd);
-		//pango_font_description_set_weight(desc, PANGO_WEIGHT_BOLD);
-		pango_layout_set_font_description(layout, desc);
-		pango_layout_set_width(layout, req_width * PANGO_SCALE);
-		pango_font_description_free(desc);
-		pango_layout_set_text(layout, server.workspaces.current->name, -1);
-		pango_cairo_show_layout(cairo, layout);
-
-		g_object_unref(layout);
-		surface = cairo_get_target(cairo);
-		cairo_surface_flush(surface);
-		cairo_destroy(cairo);
-
-		if (!output->workspace_osd) {
-			output->workspace_osd = lab_wlr_scene_buffer_create(
-				&server.scene->tree, NULL);
-		}
-		/* Position the whole thing */
-		struct wlr_box output_box;
-		wlr_output_layout_get_box(server.output_layout,
-			output->wlr_output, &output_box);
-		int lx = output_box.x + (output_box.width - width) / 2;
-		int ly = output_box.y + (output_box.height - height) / 2;
-		wlr_scene_node_set_position(&output->workspace_osd->node, lx, ly);
-		wlr_scene_buffer_set_buffer(output->workspace_osd, &buffer->base);
-		wlr_scene_buffer_set_dest_size(output->workspace_osd,
-			(int)buffer->logical_width, (int)buffer->logical_height);
-
-		/* And finally drop the buffer so it will get destroyed on OSD hide */
-		wlr_buffer_drop(&buffer->base);
-	}
 }
 
 static struct workspace *
@@ -27939,43 +27257,6 @@ LABWC_src_workspaces_c_get_next_occupied(struct workspace *current, struct wl_li
 	return LABWC_src_workspaces_c_get_adjacent_occupied(current, workspaces, wrap, false);
 }
 
-static int
-LABWC_src_workspaces_c__osd_handle_timeout(void *data)
-{
-	struct seat *seat = data;
-	workspaces_osd_hide(seat);
-	/* Don't re-check */
-	return 0;
-}
-
-static void
-LABWC_src_workspaces_c__osd_show(void)
-{
-	if (!rc.workspace_config.popuptime) {
-		return;
-	}
-
-	LABWC_src_workspaces_c__osd_update();
-	struct output *output;
-	wl_list_for_each(output, &server.outputs, link) {
-		if (output_is_usable(output) && output->workspace_osd) {
-			wlr_scene_node_set_enabled(&output->workspace_osd->node, true);
-		}
-	}
-	if (keyboard_get_all_modifiers(&server.seat)) {
-		/* Hidden by release of all modifiers */
-		server.seat.workspace_osd_shown_by_modifier = true;
-	} else {
-		/* Hidden by timer */
-		if (!server.seat.workspace_osd_timer) {
-			server.seat.workspace_osd_timer = wl_event_loop_add_timer(
-				server.wl_event_loop, LABWC_src_workspaces_c__osd_handle_timeout, &server.seat);
-		}
-		wl_event_source_timer_update(server.seat.workspace_osd_timer,
-			rc.workspace_config.popuptime);
-	}
-}
-
 /* Public API */
 void
 workspaces_init(void)
@@ -28075,9 +27356,6 @@ workspaces_switch_to(struct workspace *target, bool update_focus)
 		}
 	}
 
-	/* And finally show the OSD */
-	LABWC_src_workspaces_c__osd_show();
-
 	/*
 	 * Make sure we are not carrying around a
 	 * cursor image from the previous desktop
@@ -28090,24 +27368,6 @@ workspaces_switch_to(struct workspace *target, bool update_focus)
 	wlr_ext_workspace_handle_v1_set_active(target->ext_workspace, true);
 
 	show_desktop_reset();
-}
-
-void
-workspaces_osd_hide(struct seat *seat)
-{
-	assert(seat);
-	struct output *output;
-	wl_list_for_each(output, &server.outputs, link) {
-		if (!output->workspace_osd) {
-			continue;
-		}
-		wlr_scene_node_set_enabled(&output->workspace_osd->node, false);
-		wlr_scene_buffer_set_buffer(output->workspace_osd, NULL);
-	}
-	seat->workspace_osd_shown_by_modifier = false;
-
-	/* Update the cursor focus in case it was on top of the OSD before */
-	cursor_update_focus();
 }
 
 struct workspace *
@@ -33555,8 +32815,6 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.hide_maximized_window_titlebar = false;
 	rc.ssd_keep_border = true;
 	rc.corner_radius = 8;
-	rc.shadows_enabled = false;
-	rc.shadows_on_tiled = false;
 
 	rc.gap = 0;
 #ifdef FULLSCREEN_TEARING
@@ -33607,8 +32865,6 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.resize_draw_contents = true;
 	rc.resize_corner_range = -1;
 	rc.resize_minimum_area = 8;
-
-	rc.workspace_config.popuptime = INT_MIN;
 
 	rc.menu_ignore_button_release_period = 250;
 
@@ -33715,8 +32971,6 @@ LABWC_src_config_rcxml_c_post_processing(void)
 		conf->name = strdup_printf("%d", i);
 		wl_list_append(&rc.workspace_config.workspaces, &conf->link);
 	}
-
-	rc.workspace_config.popuptime = 1000;
 
 	/* window switcher OSD removed */
 }
