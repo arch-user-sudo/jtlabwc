@@ -23,7 +23,9 @@ PKGS += xcb xcb-dri3 xcb-present xcb-render xcb-renderutil xcb-shm xcb-xfixes \
 endif
 
 CFLAGS += $(XWAYLAND) $(FULLSCREEN_TEARING) $(shell $(PKG_CONFIG) --cflags $(PKGS)) -I. -Iamalgamate-build/include -Iwlroots/include -Ibuild/proto
-LDFLAGS += $(shell $(PKG_CONFIG) --libs $(PKGS)) -lm
+# Paired with -ffunction-sections/-fdata-sections in config.mk: drop unreachable
+# functions and data from the final link.
+LDFLAGS += $(shell $(PKG_CONFIG) --libs $(PKGS)) -lm -Wl,--gc-sections
 
 WAYLAND_SCANNER ?= wayland-scanner
 PROTO_DIR = protocols
@@ -95,7 +97,7 @@ jtlabwc: wlroots.c $(PROTO_SRCS) $(PROTO_HDRS) jtlabwc.c $(LABWC_OBJS)
 	$(STRIP) $@
 
 jtlabwcctl: jtlabwcctl.c
-	$(CC) $(CFLAGS) $(STRICT) -o $@ $<
+	$(CC) $(CFLAGS) $(STRICT) -Wl,--gc-sections -o $@ $<
 
 clean:
 	rm -rf build jtlabwc jtlabwcctl
