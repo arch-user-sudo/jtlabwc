@@ -5,7 +5,7 @@ CFLAGS = -O2 -march=native -mtune=native -pipe \
          -g0
 
 # Uncomment to build XWayland support
-#XWAYLAND = -DXWAYLAND
+XWAYLAND = -DXWAYLAND
 
 # Uncomment to enable fullscreen tearing support.  This creates the
 # wp_tearing_control_manager_v1 protocol and allows tearing for fullscreen

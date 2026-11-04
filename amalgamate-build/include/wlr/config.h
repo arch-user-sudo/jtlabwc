@@ -55,7 +55,7 @@
  *
  * Required for <wlr/xwayland/...>.
  */
-#define WLR_HAS_XWAYLAND 0
+#define WLR_HAS_XWAYLAND 1
 
 /**
  * Whether session support is compile-time enabled. Equivalent to the

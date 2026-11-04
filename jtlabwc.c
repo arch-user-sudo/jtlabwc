@@ -9,6 +9,13 @@ static void jtlabwc_control_finish(void);
 #include <stdbool.h>
 #include <sys/types.h>
 #include <wayland-util.h>
+#include <limits.h>
+#include <wayland-server-core.h>
+#include <stdlib.h>
+#include <xkbcommon/xkbcommon.h>
+#include <stdint.h>
+
+
 struct view;
 struct server;
 struct cursor_context;
@@ -54,7 +61,6 @@ struct buf buf_from_file(const char *filename);
 #endif
 #ifndef LABWC_MACROS_H
 #define LABWC_MACROS_H
-#include <limits.h>
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define CONNECT_SIGNAL(src, dest, name) \
 	(dest)->name.notify = handle_##name; \
@@ -75,7 +81,6 @@ struct buf buf_from_file(const char *filename);
 #endif
 #ifndef LABWC_LIST_H
 #define LABWC_LIST_H
-#include <wayland-server-core.h>
 static inline void
 wl_list_append(struct wl_list *list, struct wl_list *elm)
 {
@@ -85,7 +90,7 @@ wl_list_append(struct wl_list *list, struct wl_list *elm)
 #endif
 #ifndef LABWC_MEM_H
 #define LABWC_MEM_H
-#include <stdlib.h>
+
 void die_if_null(void *ptr);
 void *xzalloc(size_t size);
 #define znew(expr)       ((__typeof__(expr) *)xzalloc(sizeof(expr)))
@@ -151,7 +156,7 @@ enum lab_window_type {
 #endif
 #ifndef LABWC_PARSE_BOOL_H
 #define LABWC_PARSE_BOOL_H
-#include <stdbool.h>
+
 enum lab_tristate parse_tristate(const char *str);
 int parse_bool(const char *str, int default_value);
 void set_bool(const char *str, bool *variable);
@@ -168,7 +173,7 @@ void spawn_piped_close(pid_t pid, int pipe_fd);
 #endif
 #ifndef LABWC_STRING_HELPERS_H
 #define LABWC_STRING_HELPERS_H
-#include <stdbool.h>
+
 bool string_null_or_empty(const char *s);
 bool str_space_only(const char *s);
 char *string_strip(char *s);
@@ -193,7 +198,7 @@ struct border {
 #define LABWC_FONT_H
 #include <cairo.h>
 #include <pango/pango-font.h>
-#include <stdbool.h>
+
 struct lab_data_buffer;
 struct font {
 	char *name;
@@ -213,7 +218,7 @@ void font_finish(void);
 #endif
 #ifndef LABWC_EDGE_H
 #define LABWC_EDGE_H
-#include <stdbool.h>
+
 enum lab_edge {
 	LAB_EDGE_NONE = 0,
 	LAB_EDGE_TOP = (1 << 0),
@@ -282,7 +287,7 @@ enum lab_edge node_type_to_edges(enum lab_node_type type);
 #endif
 #ifndef LABWC_RCXML_H
 #define LABWC_RCXML_H
-#include <stdbool.h>
+
 #include <wayland-server-core.h>
 #define TITLE_BUTTONS_MAX ((LAB_NODE_BUTTON_LAST + 1) - LAB_NODE_BUTTON_FIRST)
 enum resize_indicator_mode {
@@ -396,8 +401,7 @@ void input_handlers_finish(struct seat *seat);
 #endif
 #ifndef LABWC_KEYBOARD_H
 #define LABWC_KEYBOARD_H
-#include <stdbool.h>
-#include <xkbcommon/xkbcommon.h>
+
 struct keyboard {
 	struct input base;
 	struct wlr_keyboard *wlr_keyboard;
@@ -421,7 +425,7 @@ uint32_t keyboard_get_all_modifiers(struct seat *seat);
 #endif
 #ifndef LABWC_KEY_STATE_H
 #define LABWC_KEY_STATE_H
-#include <stdbool.h>
+
 #include <stdint.h>
 struct seat;
 void key_state_indicator_update(struct seat *seat);
@@ -456,8 +460,8 @@ int key_state_nr_bound_keys(void);
 #define HAVE_LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM_SET_ENABLED 1
 #ifndef LABWC_SET_H
 #define LABWC_SET_H
-#include <stdbool.h>
-#include <stdint.h>
+
+
 #define LAB_SET_MAX_SIZE 16
 struct lab_set {
 	uint32_t values[LAB_SET_MAX_SIZE];
@@ -945,7 +949,7 @@ struct wlr_box ssd_max_extents(struct view *view);
 #ifndef LABWC_THEME_H
 #define LABWC_THEME_H
 #include <cairo.h>
-#include <stdbool.h>
+
 struct lab_img;
 enum lab_gradient {
 	LAB_GRADIENT_NONE,
@@ -1036,10 +1040,8 @@ void theme_finish(struct theme *theme);
 #endif
 #ifndef LABWC_VIEW_H
 #define LABWC_VIEW_H
-#include <stdbool.h>
 #include <stdint.h>
 #include <wayland-util.h>
-#include <xkbcommon/xkbcommon.h>
 #define LAB_MIN_VIEW_WIDTH 100
 #define LAB_MIN_VIEW_HEIGHT 60
 #define VIEW_FALLBACK_X 100
@@ -1326,7 +1328,6 @@ bool view_matches_criteria(struct view *view, enum lab_view_criteria criteria);
 #endif
 #ifndef LABWC_WORKSPACES_H
 #define LABWC_WORKSPACES_H
-#include <stdbool.h>
 #include <wayland-util.h>
 #include <wayland-server-core.h>
 struct seat;
@@ -1379,7 +1380,6 @@ struct wlr_fbox box_to_fbox(struct wlr_box *box);
 #ifndef LABWC_IMG_H
 #define LABWC_IMG_H
 #include <cairo.h>
-#include <stdbool.h>
 #include <wayland-util.h>
 struct lab_img {
 	struct wl_array modifiers;
@@ -1435,7 +1435,6 @@ void lab_scene_rect_set_size(struct lab_scene_rect *rect, int width, int height)
 #endif
 #ifndef LABWC_SCENE_HELPERS_H
 #define LABWC_SCENE_HELPERS_H
-#include <stdbool.h>
 struct wlr_buffer;
 struct wlr_scene_node;
 struct wlr_surface;
@@ -1499,7 +1498,6 @@ void scaled_font_buffer_update_markup(struct scaled_font_buffer *self,
 #ifndef LABWC_PARSE_DOUBLE_H
 #define LABWC_PARSE_DOUBLE_H
 #include <assert.h>
-#include <stdbool.h>
 bool set_double(const char *str, double *val);
 static inline bool
 set_float(const char *str, float *val)
@@ -1515,7 +1513,6 @@ set_float(const char *str, float *val)
 #endif
 #ifndef LABWC_GRAPHIC_HELPERS_H
 #define LABWC_GRAPHIC_HELPERS_H
-#include <stdbool.h>
 #include <stdint.h>
 #include <cairo.h>
 struct wlr_fbox;
@@ -1579,7 +1576,6 @@ struct lab_data_buffer *img_xbm_load_from_bitmap(const char *bitmap, float *rgba
 #endif
 #ifndef LABWC_WINDOW_RULES_H
 #define LABWC_WINDOW_RULES_H
-#include <stdbool.h>
 #include <wayland-util.h>
 enum window_rule_event {
 	LAB_WINDOW_RULE_EVENT_ON_FIRST_MAP = 0,
@@ -1630,7 +1626,6 @@ struct scaled_img_buffer *scaled_img_buffer_create(struct wlr_scene_tree *parent
 #endif
 #ifndef LABWC_MATCH_H
 #define LABWC_MATCH_H
-#include <stdbool.h>
 bool match_glob(const char *pattern, const char *string);
 #endif
 static const char color_names[] =
@@ -3252,7 +3247,6 @@ void layer_try_set_focus(struct seat *seat,
 #ifndef LABWC_EDGES_H
 #define LABWC_EDGES_H
 #include <limits.h>
-#include <stdbool.h>
 struct border;
 struct output;
 struct server;
@@ -3314,12 +3308,9 @@ void edges_calculate_visibility(struct view *ignored_view);
 #define LABWC_IDLE_H
 struct wl_display;
 struct wlr_seat;
-void idle_manager_create(struct wl_display *display);
-void idle_manager_notify_activity(struct wlr_seat *wlr_seat);
 #endif
 #ifndef LABWC_MOUSEBIND_H
 #define LABWC_MOUSEBIND_H
-#include <stdbool.h>
 #include <wayland-util.h>
 enum mouse_event {
 	MOUSE_ACTION_NONE = 0,
@@ -3361,7 +3352,6 @@ void gestures_finish(struct seat *seat);
 #endif
 #ifndef LABWC_RESISTANCE_H
 #define LABWC_RESISTANCE_H
-#include <stdbool.h>
 struct view;
 bool resistance_unsnap_apply(struct view *view, int *x, int *y);
 void resistance_move_apply(struct view *view, int *x, int *y);
@@ -3476,9 +3466,7 @@ void input_method_relay_set_focus(struct input_method_relay *relay,
 #endif
 #ifndef LABWC_KEYBIND_H
 #define LABWC_KEYBIND_H
-#include <stdbool.h>
 #include <wayland-util.h>
-#include <xkbcommon/xkbcommon.h>
 #define MAX_KEYSYMS 32
 #define MAX_KEYCODES 16
 struct server;
@@ -3535,7 +3523,6 @@ void session_shutdown(void);
 #endif
 #ifndef LABWC_OUTPUT_STATE_H
 #define LABWC_OUTPUT_STATE_H
-#include <stdbool.h>
 struct output;
 void output_state_init(struct output *output);
 bool output_state_commit(struct output *output);
@@ -8258,74 +8245,6 @@ edges_traverse_edge(struct edge current, struct edge target, struct edge obstacl
 			current.offset, current.max, target.offset, target.max);
 	return obstacle.min < hi;
 }
-#include <assert.h>
-#include <stdlib.h>
-struct LABWC_src_idle_c_lab_idle_inhibitor {
-	struct wlr_idle_inhibitor_v1 *wlr_inhibitor;
-	struct wl_listener on_destroy;
-};
-struct LABWC_src_idle_c_lab_idle_manager {
-	struct wlr_idle_notifier_v1 *ext;
-	struct {
-		struct wlr_idle_inhibit_manager_v1 *manager;
-		struct wl_listener on_new_inhibitor;
-		struct wl_listener on_destroy;
-	} inhibitor;
-};
-static struct LABWC_src_idle_c_lab_idle_manager *LABWC_src_idle_c_manager;
-static void
-LABWC_src_idle_c_handle_idle_inhibitor_destroy(struct wl_listener *listener, void *data)
-{
-	struct LABWC_src_idle_c_lab_idle_inhibitor *idle_inhibitor = wl_container_of(listener,
-		idle_inhibitor, on_destroy);
-	if (LABWC_src_idle_c_manager) {
-		bool still_inhibited =
-			wl_list_length(&LABWC_src_idle_c_manager->inhibitor.manager->inhibitors) > 1;
-		wlr_idle_notifier_v1_set_inhibited(LABWC_src_idle_c_manager->ext, still_inhibited);
-	}
-	wl_list_remove(&idle_inhibitor->on_destroy.link);
-	free(idle_inhibitor);
-}
-static void
-LABWC_src_idle_c_handle_idle_inhibitor_new(struct wl_listener *listener, void *data)
-{
-	assert(LABWC_src_idle_c_manager);
-	struct wlr_idle_inhibitor_v1 *wlr_inhibitor = data;
-	struct LABWC_src_idle_c_lab_idle_inhibitor *inhibitor = znew(*inhibitor);
-	inhibitor->wlr_inhibitor = wlr_inhibitor;
-	inhibitor->on_destroy.notify = LABWC_src_idle_c_handle_idle_inhibitor_destroy;
-	wl_signal_add(&wlr_inhibitor->events.destroy, &inhibitor->on_destroy);
-	wlr_idle_notifier_v1_set_inhibited(LABWC_src_idle_c_manager->ext, true);
-}
-static void
-LABWC_src_idle_c_handle_inhibitor_manager_destroy(struct wl_listener *listener, void *data)
-{
-	wl_list_remove(&LABWC_src_idle_c_manager->inhibitor.on_new_inhibitor.link);
-	wl_list_remove(&LABWC_src_idle_c_manager->inhibitor.on_destroy.link);
-	zfree(LABWC_src_idle_c_manager);
-}
-void
-idle_manager_create(struct wl_display *display)
-{
-	assert(!LABWC_src_idle_c_manager);
-	LABWC_src_idle_c_manager = znew(*LABWC_src_idle_c_manager);
-	LABWC_src_idle_c_manager->ext = wlr_idle_notifier_v1_create(display);
-	LABWC_src_idle_c_manager->inhibitor.manager = wlr_idle_inhibit_v1_create(display);
-	LABWC_src_idle_c_manager->inhibitor.on_new_inhibitor.notify = LABWC_src_idle_c_handle_idle_inhibitor_new;
-	wl_signal_add(&LABWC_src_idle_c_manager->inhibitor.manager->events.new_inhibitor,
-		&LABWC_src_idle_c_manager->inhibitor.on_new_inhibitor);
-	LABWC_src_idle_c_manager->inhibitor.on_destroy.notify = LABWC_src_idle_c_handle_inhibitor_manager_destroy;
-	wl_signal_add(&LABWC_src_idle_c_manager->inhibitor.manager->events.destroy,
-		&LABWC_src_idle_c_manager->inhibitor.on_destroy);
-}
-void
-idle_manager_notify_activity(struct wlr_seat *wlr_seat)
-{
-	if (!LABWC_src_idle_c_manager) {
-		return;
-	}
-	wlr_idle_notifier_v1_notify_activity(LABWC_src_idle_c_manager->ext, wlr_seat);
-}
 #define handle_axis LABWC_src_input_cursor_c_handle_axis
 #define handle_button LABWC_src_input_cursor_c_handle_button
 #define handle_frame LABWC_src_input_cursor_c_handle_frame
@@ -8959,7 +8878,6 @@ LABWC_src_input_cursor_c_handle_motion(struct wl_listener *listener, void *data)
 {
 	struct seat *seat = wl_container_of(listener, seat, on_cursor.motion);
 	struct wlr_pointer_motion_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	if (seat->cursor_scroll_wheel_emulation) {
 		enum wl_pointer_axis orientation;
@@ -8994,7 +8912,6 @@ LABWC_src_input_cursor_c_handle_motion_absolute(struct wl_listener *listener, vo
 {
 	struct seat *seat = wl_container_of(listener, seat, on_cursor.motion_absolute);
 	struct wlr_pointer_motion_absolute_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	double lx, ly;
 	wlr_cursor_absolute_to_layout_coords(seat->cursor,
@@ -9221,7 +9138,6 @@ LABWC_src_input_cursor_c_handle_button(struct wl_listener *listener, void *data)
 {
 	struct seat *seat = wl_container_of(listener, seat, on_cursor.button);
 	struct wlr_pointer_button_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	bool notify;
 	switch (event->state) {
@@ -9327,7 +9243,6 @@ LABWC_src_input_cursor_c_handle_axis(struct wl_listener *listener, void *data)
 {
 	struct seat *seat = wl_container_of(listener, seat, on_cursor.axis);
 	struct wlr_pointer_axis_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	assert(event->pointer->base.type == WLR_INPUT_DEVICE_POINTER);
 	struct input *input = event->pointer->base.data;
@@ -9504,7 +9419,6 @@ LABWC_src_input_gestures_c_handle_pinch_begin(struct wl_listener *listener, void
 {
 	struct seat *seat = wl_container_of(listener, seat, pinch_begin);
 	struct wlr_pointer_pinch_begin_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_pinch_begin(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->fingers);
@@ -9514,7 +9428,6 @@ LABWC_src_input_gestures_c_handle_pinch_update(struct wl_listener *listener, voi
 {
 	struct seat *seat = wl_container_of(listener, seat, pinch_update);
 	struct wlr_pointer_pinch_update_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_pinch_update(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->dx, event->dy,
@@ -9525,7 +9438,6 @@ LABWC_src_input_gestures_c_handle_pinch_end(struct wl_listener *listener, void *
 {
 	struct seat *seat = wl_container_of(listener, seat, pinch_end);
 	struct wlr_pointer_pinch_end_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_pinch_end(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->cancelled);
@@ -9535,7 +9447,6 @@ LABWC_src_input_gestures_c_handle_swipe_begin(struct wl_listener *listener, void
 {
 	struct seat *seat = wl_container_of(listener, seat, swipe_begin);
 	struct wlr_pointer_swipe_begin_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_swipe_begin(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->fingers);
@@ -9545,7 +9456,6 @@ LABWC_src_input_gestures_c_handle_swipe_update(struct wl_listener *listener, voi
 {
 	struct seat *seat = wl_container_of(listener, seat, swipe_update);
 	struct wlr_pointer_swipe_update_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_swipe_update(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->dx, event->dy);
@@ -9555,7 +9465,6 @@ LABWC_src_input_gestures_c_handle_swipe_end(struct wl_listener *listener, void *
 {
 	struct seat *seat = wl_container_of(listener, seat, swipe_end);
 	struct wlr_pointer_swipe_end_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_swipe_end(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->cancelled);
@@ -9565,7 +9474,6 @@ LABWC_src_input_gestures_c_handle_hold_begin(struct wl_listener *listener, void 
 {
 	struct seat *seat = wl_container_of(listener, seat, hold_begin);
 	struct wlr_pointer_hold_begin_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_hold_begin(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->fingers);
@@ -9575,7 +9483,6 @@ LABWC_src_input_gestures_c_handle_hold_end(struct wl_listener *listener, void *d
 {
 	struct seat *seat = wl_container_of(listener, seat, hold_end);
 	struct wlr_pointer_hold_end_event *event = data;
-	idle_manager_notify_activity(seat->wlr_seat);
 	cursor_set_visible(seat,   true);
 	wlr_pointer_gestures_v1_send_hold_end(seat->pointer_gestures,
 		seat->wlr_seat, event->time_msec, event->cancelled);
@@ -10098,7 +10005,6 @@ input_handlers_finish(struct seat *seat)
 }
 #include <stdbool.h>
 #include <stdint.h>
-#include <xkbcommon/xkbcommon.h>
 static struct lab_set LABWC_src_input_key_state_c_pressed, LABWC_src_input_key_state_c_bound, LABWC_src_input_key_state_c_pressed_sent;
 static bool LABWC_src_input_key_state_c_show_debug_indicator;
 static struct indicator_state {
@@ -10658,7 +10564,6 @@ LABWC_src_input_keyboard_c_handle_key(struct wl_listener *listener, void *data)
 	struct wlr_keyboard_key_event *event = data;
 	struct wlr_seat *wlr_seat = seat->wlr_seat;
 	key_state_indicator_update(seat);
-	idle_manager_notify_activity(seat->wlr_seat);
 	keyboard_cancel_keybind_repeat(keyboard);
 	enum LABWC_src_input_keyboard_c_lab_key_handled handled =
 		LABWC_src_input_keyboard_c_handle_compositor_keybindings(keyboard, event);
@@ -13582,7 +13487,6 @@ LABWC_src_server_c_allow_for_sandbox(const struct wlr_security_context_v1_state 
 		"wp_linux_drm_syncobj_manager_v1",
 		"zxdg_exporter_v1",
 		"zxdg_exporter_v2",
-		"zwp_idle_inhibit_manager_v1",
 		"zwp_pointer_constraints_v1",
 		"zxdg_output_manager_v1",
 	};
@@ -13821,8 +13725,7 @@ server_init(void)
 		wlr_security_context_manager_v1_create(server.wl_display);
 	wlr_viewporter_create(server.wl_display);
 	wlr_single_pixel_buffer_manager_v1_create(server.wl_display);
-	idle_manager_create(server.wl_display);
-	server.relative_pointer_manager = wlr_relative_pointer_manager_v1_create(
+		server.relative_pointer_manager = wlr_relative_pointer_manager_v1_create(
 		server.wl_display);
 	server.constraints = wlr_pointer_constraints_v1_create(
 		server.wl_display);
@@ -22695,7 +22598,6 @@ parse_privileged_interface(const char *name)
 		"ext_data_control_manager_v1",
 		"zwlr_data_control_manager_v1",
 		"wp_security_context_manager_v1",
-		"ext_idle_notifier_v1",
 		"zwlr_foreign_toplevel_manager_v1",
 		"ext_foreign_toplevel_list_v1",
 		"ext_session_lock_manager_v1",
