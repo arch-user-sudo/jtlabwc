@@ -20,13 +20,3 @@
 
 #define ICONDIR "/usr/local/share/icons"
 
-#define XWAYLAND_PATH "/usr/bin/Xwayland"
-
-#define HAVE_XWAYLAND_LISTENFD 0
-
-#define HAVE_XWAYLAND_NO_TOUCH_POINTER_EMULATION 0
-
-#define HAVE_XWAYLAND_FORCE_XRANDR_EMULATION 0
-
-#define HAVE_XWAYLAND_TERMINATE_DELAY 0
-
