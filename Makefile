@@ -22,6 +22,11 @@ PKGS += xcb xcb-dri3 xcb-present xcb-render xcb-renderutil xcb-shm xcb-xfixes \
         xcb-xinput xcb-composite xcb-ewmh xcb-icccm xcb-res xcb-shape
 endif
 
+# Vulkan is only needed by the Vulkan renderer.
+ifneq ($(VULKAN),)
+PKGS += vulkan
+endif
+
 CFLAGS += $(XWAYLAND) $(FULLSCREEN_TEARING) $(shell $(PKG_CONFIG) --cflags $(PKGS)) -I. -Iamalgamate-build/include -Iwlroots/include -Ibuild/proto
 # Paired with -ffunction-sections/-fdata-sections in config.mk: drop unreachable
 # functions and data from the final link.

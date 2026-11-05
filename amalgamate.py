@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Generate wlroots.c - all of wlroots inlined into one self-contained file.
 
-    jtlabwc's source (src/*.c or the jtlabwc.c monolith)
-        --  #include "wlroots.c"  -->  wlroots.c (generated)
+The hand-written jtlabwc.c includes the generated wlroots.c.  This script does
+not inline or modify jtlabwc.c; it only scans that file's identifiers so the
+pruning pass knows which wlroots code is reachable.
 
 Run it while the vendored wlroots/ tree is still here:
 
     python3 amalgamate.py            # or: meson setup ... (runs it)
 
-Afterwards wlroots/ can be deleted: building only needs the labwc sources,
-wlroots.c and config.mk.  meson re-runs this script at configure time so
-wlroots.c stays in sync (as long as wlroots/ exists; otherwise the existing
-wlroots.c is kept).
+Afterwards wlroots/ can be deleted: building only needs jtlabwc.c, wlroots.c
+and config.mk.  meson re-runs this script at configure time so wlroots.c stays
+in sync (as long as wlroots/ exists; otherwise the existing wlroots.c is kept).
 
 wlroots itself is never compiled as upstream ships it - the only tools used
 are:
 
   * wayland-scanner, for the generated protocol code,
   * two small sh scripts vendored in wlroots/ (shader headers, pnp.ids table),
-  * the C preprocessor, to see which wlroots symbols labwc actually uses,
+  * jtlabwc.c itself, to see which wlroots symbols labwc actually uses,
   * glslang, only when config.mk enables VULKAN (SPIR-V shaders).
 
 Which wlroots features go in follows config.mk: every -D option found there
@@ -44,12 +44,9 @@ GEN = os.path.join(ROOT, 'amalgamate-build')   # generated support files (protoc
 OUT = os.path.join(ROOT, 'wlroots.c')
 CONFIG_MK = os.path.join(ROOT, 'config.mk')
 
-# jtlabwc's hand-written sources/headers seed the pruning: only the wlroots
-# code they can reach is kept.  If the original src/ and include/ trees are
-# gone, fall back to the generated jtlabwc.c monolith, which contains the same
-# identifiers.
-SRC_ROOTS = [os.path.join(ROOT, 'src'), os.path.join(ROOT, 'include')]
-MONOLITH = os.path.join(ROOT, 'jtlabwc.c')
+# jtlabwc.c is the only hand-written source left.  Its identifiers seed the
+# pruning pass: only the wlroots code it can reach is kept.
+SOURCE = os.path.join(ROOT, 'jtlabwc.c')
 
 # Used only when config.mk has no -D options at all.  Features are otherwise
 # determined entirely by the toggles in config.mk.
@@ -83,7 +80,7 @@ XWAYLAND_SOURCES = [
 ]
 
 # Pulled in only when config.mk defines X11_BACKEND (the X11 backend; named
-# so because jtl.c uses `X11` as an enum value).  Its deps are just the xcb-*
+# so because jtlabwc.c uses `X11` as an enum value).  Its deps are just the xcb-*
 # libraries, all already in PKGS.
 X11_SOURCES = [
     'backend/x11/backend.c',
@@ -307,7 +304,7 @@ def gen_config_headers(flags):
         (os.path.join(GEN, 'include', 'wlr', 'config.h'), wlr_config),
         (os.path.join(GEN, 'include', 'wlr', 'version.h'), WLR_VERSION_H),
         # wlroots' internal config.h lives next to GEN, not in GEN/include, so
-        # it can never shadow labwc's own meson-generated include/config.h.
+        # it can never shadow the generated include/config.h used by the build.
         (os.path.join(GEN, 'config.h'),
          INTERNAL_CONFIG_H.replace('{XWAYLAND}',
                                    XWAYLAND_CONFIG if xwayland else '')),
@@ -444,7 +441,7 @@ def gen_pnpids():
 
 def include_dirs():
     # generated support files first: e.g. wlroots' #include "config.h" must
-    # find build/include/config.h, not jtl's own config.h.
+    # find build/include/config.h, not jtlabwc's own config.h.
     return [os.path.join(GEN, 'include'),
             os.path.join(GEN, 'protocol'),
             os.path.join(GEN, 'render', 'gles2', 'shaders'),
@@ -817,33 +814,22 @@ def header_refs(text):
 
 
 def labwc_sources():
-    """Every labwc source used to decide what wlroots code is needed."""
-    out = []
-    for root in SRC_ROOTS:
-        for dirpath, _dirs, files in os.walk(root):
-            for name in sorted(files):
-                if name.endswith(('.c', '.h')):
-                    out.append(os.path.join(dirpath, name))
-    if not out and os.path.exists(MONOLITH):
-        out.append(MONOLITH)
-    return out
+    """The jtlabwc source used to decide what wlroots code is needed."""
+    return [SOURCE] if os.path.exists(SOURCE) else []
 
 
 def labwc_seed_ids():
-    """Identifiers the labwc sources refer to.
+    """Identifiers jtlabwc.c refers to.
 
-    jtl.c could simply be preprocessed, but labwc is many translation units
-    that only compile once meson has generated its config.h and protocol
-    headers.  Unknown identifiers are harmless here (the closure only follows
-    symbols defined by wlroots sources), so the raw identifiers of every labwc
-    source/header are used - the same fallback jtl_seed_ids uses when the
-    preprocessor is unavailable.
+    jtlabwc.c cannot be preprocessed on its own until the generated protocol
+    headers and wlroots include paths exist.  Unknown identifiers are harmless
+    here (the closure only follows symbols defined by wlroots sources), so the
+    raw identifiers of jtlabwc.c are used instead.
     """
     ids = set()
     paths = labwc_sources()
     if not paths:
-        sys.exit('error: no labwc sources found under %s'
-                 % ', '.join(SRC_ROOTS))
+        sys.exit('error: jtlabwc.c not found')
     for p in paths:
         ids.update(IDS_RE.findall(scan.strip_comments_strings(_read(p))))
     return ids
@@ -921,8 +907,7 @@ def main():
             return
         sys.exit('error: wlroots/ not found and no wlroots.c to fall back on')
     if not labwc_sources():
-        sys.exit('error: no labwc sources found '
-                 '(expected src/ and include/, or jtlabwc.c)')
+        sys.exit('error: jtlabwc.c not found')
 
     # 1. generated support code (wayland-scanner + two sh scripts, no compile)
     if 'VULKAN' in flags:
@@ -961,7 +946,7 @@ def main():
     if missing:
         sys.exit('error: generated code missing: %s' % ', '.join(missing))
 
-    # 3. prune what jtl.c cannot reach
+    # 3. prune what jtlabwc.c cannot reach
     total_src, total_gen = len(candidates), len(gen_c)
     if prune_enabled:
         all_gen = list(gen_c)

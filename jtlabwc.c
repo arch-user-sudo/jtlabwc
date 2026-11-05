@@ -4,8 +4,6 @@
 #include "wlroots.c"
 static void jtlabwc_control_init(void);
 static void jtlabwc_control_finish(void);
-#ifndef LABWC_ACTION_H
-#define LABWC_ACTION_H
 #include <stdbool.h>
 #include <sys/types.h>
 #include <wayland-util.h>
@@ -39,9 +37,6 @@ bool actions_contain_toggle_keybinds(struct wl_list *action_list);
 void actions_run(struct view *activator, struct wl_list *actions, struct cursor_context *ctx);
 void action_free(struct action *action);
 void action_list_free(struct wl_list *action_list);
-#endif
-#ifndef LABWC_BUF_H
-#define LABWC_BUF_H
 struct buf {
 	char *data;
 	int alloc;
@@ -58,9 +53,6 @@ void buf_clear(struct buf *s);
 void buf_reset(struct buf *s);
 void buf_move(struct buf *dst, struct buf *src);
 struct buf buf_from_file(const char *filename);
-#endif
-#ifndef LABWC_MACROS_H
-#define LABWC_MACROS_H
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define CONNECT_SIGNAL(src, dest, name) \
 	(dest)->name.notify = handle_##name; \
@@ -78,18 +70,12 @@ struct buf buf_from_file(const char *filename);
 #define LAB_WLR_VERSION_AT_LEAST(major, minor, micro) ( \
 	server.wlr_version >= _LAB_CALC_WLR_VERSION_NUM(major, minor, micro))
 #define LAB_WLR_VERSION_LOWER(major, minor, micro) (!LAB_WLR_VERSION_AT_LEAST(major, minor, micro))
-#endif
-#ifndef LABWC_LIST_H
-#define LABWC_LIST_H
 static inline void
 wl_list_append(struct wl_list *list, struct wl_list *elm)
 {
 	wl_list_insert(list->prev, elm);
 }
 #define WL_LIST_INIT(head) {.prev = (head), .next = (head)}
-#endif
-#ifndef LABWC_MEM_H
-#define LABWC_MEM_H
 
 void die_if_null(void *ptr);
 void *xzalloc(size_t size);
@@ -104,9 +90,6 @@ char *xstrdup(const char *str);
 #define zfree(ptr) do { \
 	free(ptr); (ptr) = NULL; \
 } while (0)
-#endif
-#ifndef LABWC_CONFIG_TYPES_H
-#define LABWC_CONFIG_TYPES_H
 enum lab_placement_policy {
 	LAB_PLACE_INVALID = 0,
 	LAB_PLACE_CENTER,
@@ -153,26 +136,17 @@ enum lab_window_type {
 	LAB_WINDOW_TYPE_NORMAL,
 	LAB_WINDOW_TYPE_LEN
 };
-#endif
-#ifndef LABWC_PARSE_BOOL_H
-#define LABWC_PARSE_BOOL_H
 
 enum lab_tristate parse_tristate(const char *str);
 int parse_bool(const char *str, int default_value);
 void set_bool(const char *str, bool *variable);
 void set_bool_as_int(const char *str, int *variable);
-#endif
-#ifndef LABWC_SPAWN_H
-#define LABWC_SPAWN_H
 #include <sys/types.h>
 pid_t spawn_primary_client(const char *command);
 void spawn_async_no_shell(char const *command);
 void spawn_sync_no_shell(char const *command);
 pid_t spawn_piped(const char *command, int *pipe_fd);
 void spawn_piped_close(pid_t pid, int pipe_fd);
-#endif
-#ifndef LABWC_STRING_HELPERS_H
-#define LABWC_STRING_HELPERS_H
 
 bool string_null_or_empty(const char *s);
 bool str_space_only(const char *s);
@@ -184,18 +158,12 @@ bool str_endswith(const char *const string, const char *const suffix);
 bool str_endswith_ignore_case(const char *const string, const char *const suffix);
 bool str_starts_with(const char *s, char needle, const char *ignore_chars);
 bool str_equal(const char *a, const char *b);
-#endif
-#ifndef LABWC_BORDER_H
-#define LABWC_BORDER_H
 struct border {
 	int top;
 	int right;
 	int bottom;
 	int left;
 };
-#endif
-#ifndef LABWC_FONT_H
-#define LABWC_FONT_H
 #include <cairo.h>
 #include <pango/pango-font.h>
 
@@ -215,9 +183,6 @@ void font_buffer_create(struct lab_data_buffer **buffer, int max_width,
 	int height, const char *text, struct font *font, const float *color,
 	cairo_pattern_t *bg_pattern, double scale, bool use_markup);
 void font_finish(void);
-#endif
-#ifndef LABWC_EDGE_H
-#define LABWC_EDGE_H
 
 enum lab_edge {
 	LAB_EDGE_NONE = 0,
@@ -243,9 +208,6 @@ enum lab_edge {
 enum lab_edge lab_edge_parse(const char *direction, bool tiled, bool any);
 bool lab_edge_is_cardinal(enum lab_edge edge);
 enum lab_edge lab_edge_invert(enum lab_edge edge);
-#endif
-#ifndef LABWC_NODE_TYPE_H
-#define LABWC_NODE_TYPE_H
 enum lab_node_type {
 	LAB_NODE_NONE = 0,
 	LAB_NODE_BUTTON_CLOSE = 1,
@@ -284,9 +246,6 @@ enum lab_node_type {
 enum lab_node_type node_type_parse(const char *context);
 bool node_type_contains(enum lab_node_type whole, enum lab_node_type part);
 enum lab_edge node_type_to_edges(enum lab_node_type type);
-#endif
-#ifndef LABWC_RCXML_H
-#define LABWC_RCXML_H
 
 #include <wayland-server-core.h>
 #define TITLE_BUTTONS_MAX ((LAB_NODE_BUTTON_LAST + 1) - LAB_NODE_BUTTON_FIRST)
@@ -385,9 +344,6 @@ extern struct rcxml rc;
 void rcxml_init(void);
 void rcxml_finish(void);
 uint32_t parse_privileged_interface(const char *name);
-#endif
-#ifndef LABWC_INPUT_H
-#define LABWC_INPUT_H
 #include <wayland-server-core.h>
 struct input {
 	struct wlr_input_device *wlr_input_device;
@@ -398,9 +354,6 @@ struct input {
 };
 void input_handlers_init(struct seat *seat);
 void input_handlers_finish(struct seat *seat);
-#endif
-#ifndef LABWC_KEYBOARD_H
-#define LABWC_KEYBOARD_H
 
 struct keyboard {
 	struct input base;
@@ -422,9 +375,6 @@ void keyboard_set_numlock(struct wlr_keyboard *keyboard);
 void keyboard_update_layout(struct seat *seat, xkb_layout_index_t layout);
 void keyboard_cancel_keybind_repeat(struct keyboard *keyboard);
 uint32_t keyboard_get_all_modifiers(struct seat *seat);
-#endif
-#ifndef LABWC_KEY_STATE_H
-#define LABWC_KEY_STATE_H
 
 #include <stdint.h>
 struct seat;
@@ -437,7 +387,6 @@ void key_state_store_pressed_key_as_bound(uint32_t keycode);
 bool key_state_corresponding_press_event_was_bound(uint32_t keycode);
 void key_state_bound_key_remove(uint32_t keycode);
 int key_state_nr_bound_keys(void);
-#endif
 #define PACKAGE_NAME "jtlabwc"
 #define PACKAGE_VERSION "0.20.2"
 #define LABWC_VERSION "0.20.2"
@@ -458,8 +407,6 @@ int key_state_nr_bound_keys(void);
 #endif
 #define HAVE_LIBINPUT_CONFIG_QUIRKS 1
 #define HAVE_LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM_SET_ENABLED 1
-#ifndef LABWC_SET_H
-#define LABWC_SET_H
 
 
 #define LAB_SET_MAX_SIZE 16
@@ -470,9 +417,6 @@ struct lab_set {
 bool lab_set_contains(struct lab_set *set, uint32_t value);
 void lab_set_add(struct lab_set *set, uint32_t value);
 void lab_set_remove(struct lab_set *set, uint32_t value);
-#endif
-#ifndef LABWC_CURSOR_H
-#define LABWC_CURSOR_H
 #include <wayland-server-protocol.h>
 struct view;
 struct seat;
@@ -537,9 +481,6 @@ void cursor_emulate_axis(struct seat *seat,
 		enum wl_pointer_axis orientation, double delta, double delta_discrete,
 		enum wl_pointer_axis_source source, uint32_t time_msec);
 void cursor_finish(struct seat *seat);
-#endif
-#ifndef LABWC_OVERLAY_H
-#define LABWC_OVERLAY_H
 struct seat;
 struct overlay {
 	struct lab_scene_rect *rect;
@@ -552,9 +493,6 @@ struct overlay {
 };
 void overlay_update(struct seat *seat);
 void overlay_finish(struct seat *seat);
-#endif
-#ifndef LABWC_H
-#define LABWC_H
 #define XCURSOR_DEFAULT "left_ptr"
 #define XCURSOR_SIZE 24
 struct wlr_xdg_popup;
@@ -771,9 +709,6 @@ void server_finish(void);
 void create_constraint(struct wl_listener *listener, void *data);
 void constrain_cursor(struct wlr_pointer_constraint_v1
 	*constraint);
-#endif
-#ifndef LABWC_MENU_H
-#define LABWC_MENU_H
 #include <wayland-server.h>
 struct view;
 struct server;
@@ -835,9 +770,6 @@ void menu_open(struct menu *menu, int x, int y);
 void menu_process_cursor_motion(struct wlr_scene_node *node);
 void menu_close(void);
 void menu_reconfigure(void);
-#endif
-#ifndef LABWC_OUTPUT_H
-#define LABWC_OUTPUT_H
 #define LAB_NR_LAYERS (4)
 struct output {
 	struct wl_list link;
@@ -870,18 +802,12 @@ bool output_get_tearing_allowance(struct output *output);
 struct wlr_box output_usable_area_in_layout_coords(struct output *output);
 void handle_output_power_manager_set_mode(struct wl_listener *listener,
 	void *data);
-#endif
-#ifndef LABWC_OUTPUT_VIRTUAL_H
-#define LABWC_OUTPUT_VIRTUAL_H
 struct server;
 struct wlr_output;
 void output_virtual_add(const char *output_name,
 		struct wlr_output **store_wlr_output);
 void output_virtual_remove(const char *output_name);
 void output_virtual_update_fallback(void);
-#endif
-#ifndef LABWC_REGIONS_H
-#define LABWC_REGIONS_H
 struct seat;
 struct view;
 struct server;
@@ -908,14 +834,8 @@ void regions_evacuate_output(struct output *output);
 void regions_destroy(struct seat *seat, struct wl_list *regions);
 struct region *regions_from_cursor(void);
 struct region *regions_from_name(const char *region_name, struct output *output);
-#endif
-#ifndef LABWC_SHOW_DESKTOP_H
-#define LABWC_SHOW_DESKTOP_H
 void show_desktop_toggle(void);
 void show_desktop_reset(void);
-#endif
-#ifndef LABWC_SSD_H
-#define LABWC_SSD_H
 enum ssd_active_state {
 	SSD_INACTIVE = 0,
 	SSD_ACTIVE = 1,
@@ -945,9 +865,6 @@ enum lab_node_type ssd_get_resizing_type(const struct ssd *ssd,
 enum lab_ssd_mode ssd_mode_parse(const char *mode);
 struct border ssd_thickness(struct view *view);
 struct wlr_box ssd_max_extents(struct view *view);
-#endif
-#ifndef LABWC_THEME_H
-#define LABWC_THEME_H
 #include <cairo.h>
 
 struct lab_img;
@@ -1037,9 +954,6 @@ struct theme {
 };
 void theme_init(struct theme *theme);
 void theme_finish(struct theme *theme);
-#endif
-#ifndef LABWC_VIEW_H
-#define LABWC_VIEW_H
 #include <stdint.h>
 #include <wayland-util.h>
 #define LAB_MIN_VIEW_WIDTH 100
@@ -1325,9 +1239,6 @@ enum view_axis view_axis_parse(const char *direction);
 enum lab_placement_policy view_placement_parse(const char *policy);
 struct wlr_xdg_surface *xdg_surface_from_view(struct view *view);
 bool view_matches_criteria(struct view *view, enum lab_view_criteria criteria);
-#endif
-#ifndef LABWC_WORKSPACES_H
-#define LABWC_WORKSPACES_H
 #include <wayland-util.h>
 #include <wayland-server-core.h>
 struct seat;
@@ -1345,9 +1256,6 @@ void workspaces_switch_to(struct workspace *target, bool update_focus);
 void workspaces_destroy(void);
 struct workspace *workspaces_find(struct workspace *anchor, const char *name,
 	bool wrap);
-#endif
-#ifndef LABWC_BUFFER_H
-#define LABWC_BUFFER_H
 #include <cairo.h>
 struct lab_data_buffer {
 	struct wlr_buffer base;
@@ -1366,9 +1274,6 @@ struct lab_data_buffer *buffer_create_from_data(void *pixel_data, uint32_t width
 	uint32_t height, uint32_t stride);
 struct lab_data_buffer *buffer_resize(struct lab_data_buffer *src_buffer,
 	int width, int height, double scale);
-#endif
-#ifndef LABWC_BOX_H
-#define LABWC_BOX_H
 bool box_intersects(struct wlr_box *box_a, struct wlr_box *box_b);
 void box_union(struct wlr_box *box_dest, struct wlr_box *box_a,
 	struct wlr_box *box_b);
@@ -1376,9 +1281,6 @@ void box_center(int width, int height, const struct wlr_box *ref,
 	const struct wlr_box *bound, int *x, int *y);
 struct wlr_box box_fit_within(int width, int height, struct wlr_box *bound);
 struct wlr_fbox box_to_fbox(struct wlr_box *box);
-#endif
-#ifndef LABWC_IMG_H
-#define LABWC_IMG_H
 #include <cairo.h>
 #include <wayland-util.h>
 struct lab_img {
@@ -1393,14 +1295,8 @@ struct lab_data_buffer *lab_img_render(struct lab_img *img,
 	int width, int height, double scale);
 void lab_img_destroy(struct lab_img *img);
 bool lab_img_equal(struct lab_img *img_a, struct lab_img *img_b);
-#endif
-#ifndef LABWC_FD_UTIL_H
-#define LABWC_FD_UTIL_H
 void increase_nofile_limit(void);
 void restore_nofile_limit(void);
-#endif
-#ifndef LABWC_DIR_H
-#define LABWC_DIR_H
 #include <wayland-server-core.h>
 struct path {
 	char *string;
@@ -1408,9 +1304,6 @@ struct path {
 };
 void paths_config_create(struct wl_list *paths, const char *filename);
 void paths_destroy(struct wl_list *paths);
-#endif
-#ifndef LABWC_LAB_SCENE_RECT_H
-#define LABWC_LAB_SCENE_RECT_H
 #include <wayland-server-core.h>
 struct wlr_scene_tree;
 struct lab_scene_rect_options {
@@ -1432,9 +1325,6 @@ struct lab_scene_rect {
 struct lab_scene_rect *lab_scene_rect_create(struct wlr_scene_tree *parent,
 	struct lab_scene_rect_options *opts);
 void lab_scene_rect_set_size(struct lab_scene_rect *rect, int width, int height);
-#endif
-#ifndef LABWC_SCENE_HELPERS_H
-#define LABWC_SCENE_HELPERS_H
 struct wlr_buffer;
 struct wlr_scene_node;
 struct wlr_surface;
@@ -1449,9 +1339,6 @@ struct wlr_scene_buffer *lab_wlr_scene_buffer_create(
 struct wlr_scene_node *lab_wlr_scene_get_prev_node(struct wlr_scene_node *node);
 bool lab_wlr_scene_output_commit(struct wlr_scene_output *scene_output,
 	struct wlr_output_state *state);
-#endif
-#ifndef LABWC_NODE_DESCRIPTOR_H
-#define LABWC_NODE_DESCRIPTOR_H
 #include <wayland-server-core.h>
 struct wlr_scene_node;
 struct node_descriptor {
@@ -1469,9 +1356,6 @@ struct menuitem *node_menuitem_from_node(
 	struct wlr_scene_node *wlr_scene_node);
 struct ssd_button *node_try_ssd_button_from_node(
 	struct wlr_scene_node *wlr_scene_node);
-#endif
-#ifndef LABWC_SCALED_FONT_BUFFER_H
-#define LABWC_SCALED_FONT_BUFFER_H
 struct wlr_scene_tree;
 struct wlr_scene_buffer;
 struct scaled_buffer;
@@ -1494,9 +1378,6 @@ void scaled_font_buffer_update(struct scaled_font_buffer *self,
 void scaled_font_buffer_update_markup(struct scaled_font_buffer *self,
 	const char *text, int max_width, struct font *font, const float *color,
 	const float *bg_color, bool use_markup);
-#endif
-#ifndef LABWC_PARSE_DOUBLE_H
-#define LABWC_PARSE_DOUBLE_H
 #include <assert.h>
 bool set_double(const char *str, double *val);
 static inline bool
@@ -1510,9 +1391,6 @@ set_float(const char *str, float *val)
 	}
 	return false;
 }
-#endif
-#ifndef LABWC_GRAPHIC_HELPERS_H
-#define LABWC_GRAPHIC_HELPERS_H
 #include <stdint.h>
 #include <cairo.h>
 struct wlr_fbox;
@@ -1526,9 +1404,6 @@ bool is_pattern_opaque(cairo_pattern_t *pattern);
 	} \
 } while (0)
 void draw_cairo_border(cairo_t *cairo, struct wlr_fbox fbox, double line_width);
-#endif
-#ifndef LABWC_SCALED_BUFFER_H
-#define LABWC_SCALED_BUFFER_H
 #include <wayland-server-core.h>
 #define LAB_SCALED_BUFFER_MAX_CACHE 2
 struct wlr_buffer;
@@ -1567,14 +1442,8 @@ struct scaled_buffer_cache_entry {
 	struct wlr_buffer *buffer;
 	double scale;
 };
-#endif
-#ifndef LABWC_IMG_XBM_H
-#define LABWC_IMG_XBM_H
 struct lab_data_buffer;
 struct lab_data_buffer *img_xbm_load_from_bitmap(const char *bitmap, float *rgba);
-#endif
-#ifndef LABWC_WINDOW_RULES_H
-#define LABWC_WINDOW_RULES_H
 #include <wayland-util.h>
 enum window_rule_event {
 	LAB_WINDOW_RULE_EVENT_ON_FIRST_MAP = 0,
@@ -1606,9 +1475,6 @@ struct window_rule {
 struct view;
 void window_rules_apply(struct view *view, enum window_rule_event event);
 enum property window_rules_get_property(struct view *view, const char *property);
-#endif
-#ifndef LABWC_SCALED_IMG_BUFFER_H
-#define LABWC_SCALED_IMG_BUFFER_H
 struct wlr_scene_tree;
 struct wlr_scene_node;
 struct wlr_scene_buffer;
@@ -1622,22 +1488,13 @@ struct scaled_img_buffer {
 };
 struct scaled_img_buffer *scaled_img_buffer_create(struct wlr_scene_tree *parent,
 	struct lab_img *img, int width, int height);
-#endif
-#ifndef LABWC_MATCH_H
-#define LABWC_MATCH_H
 bool match_glob(const char *pattern, const char *string);
-#endif
-#ifndef LABWC_DND_H
-#define LABWC_DND_H
 #include <wayland-server-core.h>
 struct seat;
 void dnd_init(struct seat *seat);
 void dnd_icons_show(struct seat *seat, bool show);
 void dnd_icons_move(struct seat *seat, double x, double y);
 void dnd_finish(struct seat *seat);
-#endif
-#ifndef LABWC_LAYERS_H
-#define LABWC_LAYERS_H
 #include <wayland-server-core.h>
 struct server;
 struct output;
@@ -1669,9 +1526,6 @@ void layers_finish(void);
 void layers_arrange(struct output *output);
 void layer_try_set_focus(struct seat *seat,
 	struct wlr_layer_surface_v1 *layer_surface);
-#endif
-#ifndef LABWC_EDGES_H
-#define LABWC_EDGES_H
 #include <limits.h>
 struct border;
 struct output;
@@ -1729,14 +1583,8 @@ void edges_adjust_resize_geom(struct view *view, struct border edges,
 	enum lab_edge resize_edges, struct wlr_box *geom, bool use_pending);
 bool edges_traverse_edge(struct edge current, struct edge target, struct edge edge);
 void edges_calculate_visibility(struct view *ignored_view);
-#endif
-#ifndef LABWC_IDLE_H
-#define LABWC_IDLE_H
 struct wl_display;
 struct wlr_seat;
-#endif
-#ifndef LABWC_MOUSEBIND_H
-#define LABWC_MOUSEBIND_H
 #include <wayland-util.h>
 enum mouse_event {
 	MOUSE_ACTION_NONE = 0,
@@ -1769,29 +1617,17 @@ uint32_t mousebind_button_from_str(const char *str, uint32_t *modifiers);
 enum direction mousebind_direction_from_str(const char *str, uint32_t *modifiers);
 struct mousebind *mousebind_create(const char *context);
 bool mousebind_the_same(struct mousebind *a, struct mousebind *b);
-#endif
-#ifndef LABWC_GESTURES_H
-#define LABWC_GESTURES_H
 struct seat;
 void gestures_init(struct seat *seat);
 void gestures_finish(struct seat *seat);
-#endif
-#ifndef LABWC_RESISTANCE_H
-#define LABWC_RESISTANCE_H
 struct view;
 bool resistance_unsnap_apply(struct view *view, int *x, int *y);
 void resistance_move_apply(struct view *view, int *x, int *y);
 void resistance_resize_apply(struct view *view, struct wlr_box *new_view_geo);
-#endif
-#ifndef LABWC_RESIZE_OUTLINES_H
-#define LABWC_RESIZE_OUTLINES_H
 struct view;
 void resize_outlines_update(struct view *view, struct wlr_box new_geo);
 void resize_outlines_finish(struct view *view);
 bool resize_outlines_enabled(struct view *view);
-#endif
-#ifndef LABWC_XWAYLAND_H
-#define LABWC_XWAYLAND_H
 #if HAVE_XWAYLAND
 struct wlr_compositor;
 struct wlr_output;
@@ -1842,9 +1678,6 @@ void xwayland_adjust_usable_area(struct view *view,
 void xwayland_update_workarea(void);
 void xwayland_flush(void);
 #endif
-#endif
-#ifndef LABWC_IME_H
-#define LABWC_IME_H
 #include <wayland-server-core.h>
 struct keyboard;
 struct wlr_keyboard_key_event;
@@ -1889,9 +1722,6 @@ struct input_method_relay *input_method_relay_create(struct seat *seat);
 void input_method_relay_finish(struct input_method_relay *relay);
 void input_method_relay_set_focus(struct input_method_relay *relay,
 	struct wlr_surface *surface);
-#endif
-#ifndef LABWC_KEYBIND_H
-#define LABWC_KEYBIND_H
 #include <wayland-util.h>
 #define MAX_KEYSYMS 32
 #define MAX_KEYCODES 16
@@ -1917,9 +1747,6 @@ bool keybind_the_same(struct keybind *a, struct keybind *b);
 bool keybind_contains_keycode(struct keybind *keybind, xkb_keycode_t keycode);
 bool keybind_contains_keysym(struct keybind *keybind, xkb_keysym_t keysym);
 void keybind_update_keycodes(void);
-#endif
-#ifndef LABWC_SESSION_LOCK_H
-#define LABWC_SESSION_LOCK_H
 #include <wayland-server-core.h>
 struct output;
 struct server;
@@ -1939,37 +1766,22 @@ struct session_lock_manager {
 void session_lock_init(void);
 void session_lock_output_create(struct session_lock_manager *manager, struct output *output);
 void session_lock_update_for_layout_change(void);
-#endif
-#ifndef LABWC_SESSION_H
-#define LABWC_SESSION_H
 struct server;
 void session_environment_init(void);
 void session_autostart_init(void);
 void session_shutdown(void);
-#endif
-#ifndef LABWC_OUTPUT_STATE_H
-#define LABWC_OUTPUT_STATE_H
 struct output;
 void output_state_init(struct output *output);
 bool output_state_commit(struct output *output);
-#endif
-#ifndef LABWC_PLACEMENT_H
-#define LABWC_PLACEMENT_H
 #include <stdbool.h>
 struct view;
 bool placement_find_best(struct view *view, struct wlr_box *geometry);
-#endif
-#ifndef LABWC_RESIZE_INDICATOR_H
-#define LABWC_RESIZE_INDICATOR_H
 struct server;
 struct view;
 void resize_indicator_reconfigure(void);
 void resize_indicator_show(struct view *view);
 void resize_indicator_update(struct view *view);
 void resize_indicator_hide(struct view *view);
-#endif
-#ifndef LABWC_SNAP_CONSTRAINTS_H
-#define LABWC_SNAP_CONSTRAINTS_H
 struct view;
 struct wlr_box;
 void snap_constraints_set(struct view *view, enum lab_edge direction,
@@ -1978,9 +1790,6 @@ void snap_constraints_invalidate(struct view *view);
 void snap_constraints_update(struct view *view);
 struct wlr_box snap_constraints_effective(struct view *view,
 	enum lab_edge direction, bool use_pending);
-#endif
-#ifndef LABWC_LIBINPUT_H
-#define LABWC_LIBINPUT_H
 #include <libinput.h>
 #include <string.h>
 #include <wayland-server-core.h>
@@ -2017,9 +1826,6 @@ enum lab_libinput_device_type get_device_type(const char *s);
 const char *libinput_device_type_name(enum lab_libinput_device_type type);
 struct libinput_category *libinput_category_create(void);
 struct libinput_category *libinput_category_get_default(void);
-#endif
-#ifndef LABWC_DECORATIONS_H
-#define LABWC_DECORATIONS_H
 struct server;
 struct view;
 struct wlr_surface;
@@ -2029,9 +1835,6 @@ void kde_server_decoration_update_default(void);
 void kde_server_decoration_set_view(struct view *view, struct wlr_surface *surface);
 void kde_server_decoration_finish(void);
 void xdg_server_decoration_finish(void);
-#endif
-#ifndef LABWC_ARRAY_H
-#define LABWC_ARRAY_H
 #include <wayland-server-core.h>
 static inline size_t
 wl_array_len(struct wl_array *array)
@@ -2049,9 +1852,6 @@ wl_array_len(struct wl_array *array)
 		die_if_null(_entry);                         \
 		*_entry = (_val);                            \
 	} while (0)
-#endif
-#ifndef LABWC_SNAP_H
-#define LABWC_SNAP_H
 struct view;
 struct wlr_box;
 void snap_move_to_edge(struct view *view,
@@ -2062,9 +1862,6 @@ void snap_shrink_to_next_edge(struct view *view,
 	enum lab_edge direction, struct wlr_box *geo);
 void snap_invalidate_edge_cache(struct view *view);
 void snap_update_cache_geometry(struct view *view);
-#endif
-#ifndef LABWC_SSD_INTERNAL_H
-#define LABWC_SSD_INTERNAL_H
 struct ssd {
 	struct view *view;
 	struct wlr_scene_tree *tree;
@@ -2123,25 +1920,16 @@ void ssd_border_destroy(struct ssd *ssd);
 void ssd_extents_create(struct ssd *ssd);
 void ssd_extents_update(struct ssd *ssd);
 void ssd_extents_destroy(struct ssd *ssd);
-#endif
-#ifndef LABWC_VIEW_IMPL_COMMON_H
-#define LABWC_VIEW_IMPL_COMMON_H
 struct view;
 void view_impl_map(struct view *view);
 void view_impl_unmap(struct view *view);
 void view_impl_apply_geometry(struct view *view, int w, int h);
-#endif
-#ifndef LABWC_FOREIGN_TOPLEVEL_H
-#define LABWC_FOREIGN_TOPLEVEL_H
 struct view;
 struct foreign_toplevel;
 struct foreign_toplevel *foreign_toplevel_create(struct view *view);
 void foreign_toplevel_set_parent(struct foreign_toplevel *toplevel,
 	struct foreign_toplevel *parent);
 void foreign_toplevel_destroy(struct foreign_toplevel *toplevel);
-#endif
-#ifndef LABWC_WLR_FOREIGN_TOPLEVEL_H
-#define LABWC_WLR_FOREIGN_TOPLEVEL_H
 #include <wayland-server-core.h>
 struct wlr_foreign_toplevel {
 	struct view *view;
@@ -2169,9 +1957,6 @@ void wlr_foreign_toplevel_init(struct wlr_foreign_toplevel *wlr_toplevel,
 void wlr_foreign_toplevel_set_parent(struct wlr_foreign_toplevel *wlr_toplevel,
 	struct wlr_foreign_toplevel *parent);
 void wlr_foreign_toplevel_finish(struct wlr_foreign_toplevel *wlr_toplevel);
-#endif
-#ifndef LABWC_EXT_FOREIGN_TOPLEVEL_H
-#define LABWC_EXT_FOREIGN_TOPLEVEL_H
 #include <wayland-server-core.h>
 struct ext_foreign_toplevel {
 	struct view *view;
@@ -2187,9 +1972,6 @@ struct ext_foreign_toplevel {
 void ext_foreign_toplevel_init(struct ext_foreign_toplevel *ext_toplevel,
 	struct view *view);
 void ext_foreign_toplevel_finish(struct ext_foreign_toplevel *ext_toplevel);
-#endif
-#ifndef LABWC_DEFAULT_BINDINGS_H
-#define LABWC_DEFAULT_BINDINGS_H
 #include <stddef.h>
 static struct key_combos {
 	const char *binding, *action;
@@ -2708,7 +2490,6 @@ static struct mouse_combos {
 		.context = NULL,
 	},
 };
-#endif
 #include <assert.h>
 #include <signal.h>
 #include <string.h>
