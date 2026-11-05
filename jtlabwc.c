@@ -1,9 +1,8 @@
 #ifndef WLR_USE_UNSTABLE
 #define WLR_USE_UNSTABLE 1
 #endif
+
 #include "wlroots.c"
-static void jtlabwc_control_init(void);
-static void jtlabwc_control_finish(void);
 #include <stdbool.h>
 #include <sys/types.h>
 #include <wayland-util.h>
@@ -12,7 +11,43 @@ static void jtlabwc_control_finish(void);
 #include <stdlib.h>
 #include <xkbcommon/xkbcommon.h>
 #include <stdint.h>
+#include <cairo.h>
+#include <pango/pango-font.h>
+#include <wayland-server-protocol.h>
+#include <wayland-server.h>
+#include <assert.h>
+#include <libinput.h>
+#include <string.h>
+#include <stddef.h>
+#include <signal.h>
+#include <strings.h>
+#include <unistd.h>
+#include <drm_fourcc.h>
+#include <fcntl.h>
+#include <glib.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <ctype.h>
+#include <stdarg.h>
+#include <sys/resource.h>
+#include <locale.h>
+#include <fnmatch.h>
+#include <pango/pangocairo.h>
+#include <pixman.h>
+#include <time.h>
+#include <getopt.h>
+#include <float.h>
+#include <math.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include "wlr/util/log.h"
+#include <linux/input-event-codes.h>
+#include <dirent.h>
 
+static void jtlabwc_control_init(void);
+static void jtlabwc_control_finish(void);
 
 struct view;
 struct server;
@@ -28,8 +63,6 @@ const char *action_get_str(struct action *action, const char *key,
 bool action_is_valid(struct action *action);
 bool action_is_show_menu(struct action *action);
 void action_arg_add_str(struct action *action, const char *key, const char *value);
-void action_arg_add_actionlist(struct action *action, const char *key);
-void action_arg_add_querylist(struct action *action, const char *key);
 struct wl_list *action_get_actionlist(struct action *action, const char *key);
 struct wl_list *action_get_querylist(struct action *action, const char *key);
 void action_arg_from_xml_node(struct action *action, const char *nodename, const char *content);
@@ -46,13 +79,11 @@ struct buf {
 void buf_expand_tilde(struct buf *s);
 void buf_expand_shell_variables(struct buf *s);
 void buf_add_fmt(struct buf *s, const char *fmt, ...);
-void buf_add_hex_color(struct buf *s, float color[4]);
 void buf_add(struct buf *s, const char *data);
 void buf_add_char(struct buf *s, char ch);
 void buf_clear(struct buf *s);
 void buf_reset(struct buf *s);
 void buf_move(struct buf *dst, struct buf *src);
-struct buf buf_from_file(const char *filename);
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define CONNECT_SIGNAL(src, dest, name) \
 	(dest)->name.notify = handle_##name; \
@@ -69,7 +100,6 @@ struct buf buf_from_file(const char *filename);
 #define _LAB_CALC_WLR_VERSION_NUM(major, minor, micro) (((uint32_t)(major) << 16) | ((uint32_t)(minor) << 8) | (uint32_t)(micro))
 #define LAB_WLR_VERSION_AT_LEAST(major, minor, micro) ( \
 	server.wlr_version >= _LAB_CALC_WLR_VERSION_NUM(major, minor, micro))
-#define LAB_WLR_VERSION_LOWER(major, minor, micro) (!LAB_WLR_VERSION_AT_LEAST(major, minor, micro))
 static inline void
 wl_list_append(struct wl_list *list, struct wl_list *elm)
 {
@@ -139,24 +169,16 @@ enum lab_window_type {
 
 enum lab_tristate parse_tristate(const char *str);
 int parse_bool(const char *str, int default_value);
-void set_bool(const char *str, bool *variable);
-void set_bool_as_int(const char *str, int *variable);
-#include <sys/types.h>
 pid_t spawn_primary_client(const char *command);
 void spawn_async_no_shell(char const *command);
 void spawn_sync_no_shell(char const *command);
-pid_t spawn_piped(const char *command, int *pipe_fd);
-void spawn_piped_close(pid_t pid, int pipe_fd);
 
 bool string_null_or_empty(const char *s);
-bool str_space_only(const char *s);
 char *string_strip(char *s);
 void string_truncate_at_pattern(char *buf, const char *pattern);
 char *strdup_printf(const char *fmt, ...);
 char *str_join(const char *const parts[], const char *fmt, const char *sep);
 bool str_endswith(const char *const string, const char *const suffix);
-bool str_endswith_ignore_case(const char *const string, const char *const suffix);
-bool str_starts_with(const char *s, char needle, const char *ignore_chars);
 bool str_equal(const char *a, const char *b);
 struct border {
 	int top;
@@ -164,8 +186,6 @@ struct border {
 	int bottom;
 	int left;
 };
-#include <cairo.h>
-#include <pango/pango-font.h>
 
 struct lab_data_buffer;
 struct font {
@@ -214,7 +234,6 @@ enum lab_node_type {
 	LAB_NODE_BUTTON_MAXIMIZE,
 	LAB_NODE_BUTTON_ICONIFY,
 	LAB_NODE_BUTTON_WINDOW_MENU,
-	LAB_NODE_BUTTON_SHADE,
 	LAB_NODE_BUTTON_OMNIPRESENT,
 	LAB_NODE_BUTTON_FIRST = LAB_NODE_BUTTON_CLOSE,
 	LAB_NODE_BUTTON_LAST = LAB_NODE_BUTTON_OMNIPRESENT,
@@ -247,7 +266,6 @@ enum lab_node_type node_type_parse(const char *context);
 bool node_type_contains(enum lab_node_type whole, enum lab_node_type part);
 enum lab_edge node_type_to_edges(enum lab_node_type type);
 
-#include <wayland-server-core.h>
 #define TITLE_BUTTONS_MAX ((LAB_NODE_BUTTON_LAST + 1) - LAB_NODE_BUTTON_FIRST)
 enum resize_indicator_mode {
 	LAB_RESIZE_INDICATOR_NEVER = 0,
@@ -344,7 +362,6 @@ extern struct rcxml rc;
 void rcxml_init(void);
 void rcxml_finish(void);
 uint32_t parse_privileged_interface(const char *name);
-#include <wayland-server-core.h>
 struct input {
 	struct wlr_input_device *wlr_input_device;
 	struct seat *seat;
@@ -376,7 +393,6 @@ void keyboard_update_layout(struct seat *seat, xkb_layout_index_t layout);
 void keyboard_cancel_keybind_repeat(struct keyboard *keyboard);
 uint32_t keyboard_get_all_modifiers(struct seat *seat);
 
-#include <stdint.h>
 struct seat;
 void key_state_indicator_update(struct seat *seat);
 void key_state_indicator_toggle(void);
@@ -386,27 +402,15 @@ void key_state_set_pressed(uint32_t keycode, bool is_pressed);
 void key_state_store_pressed_key_as_bound(uint32_t keycode);
 bool key_state_corresponding_press_event_was_bound(uint32_t keycode);
 void key_state_bound_key_remove(uint32_t keycode);
-int key_state_nr_bound_keys(void);
-#define PACKAGE_NAME "jtlabwc"
-#define PACKAGE_VERSION "0.20.2"
 #define LABWC_VERSION "0.20.2"
-#define SYSCONFDIR "/etc"
-#define XDG_CONFIG_DIR "/etc/xdg"
-#define XDG_DATA_DIR "/usr/local/share"
 #define XDG_CONFIG_HOME "/home/lynch/.config"
-#define XDG_DATA_HOME "/home/lynch/.local/share"
-#define XDG_STATE_HOME "/home/lynch/.local/state"
-#define XDG_CACHE_HOME "/home/lynch/.cache"
 #define XDG_RUNTIME_DIR "/run/user/1000"
 #define XDG_CONFIG_DIRS "/etc/xdg"
-#define XDG_DATA_DIRS "/usr/local/share:/usr/share"
 #ifdef XWAYLAND
 #define HAVE_XWAYLAND 1
 #else
 #define HAVE_XWAYLAND 0
 #endif
-#define HAVE_LIBINPUT_CONFIG_QUIRKS 1
-#define HAVE_LIBINPUT_CONFIG_ACCEL_PROFILE_CUSTOM_SET_ENABLED 1
 
 
 #define LAB_SET_MAX_SIZE 16
@@ -417,7 +421,6 @@ struct lab_set {
 bool lab_set_contains(struct lab_set *set, uint32_t value);
 void lab_set_add(struct lab_set *set, uint32_t value);
 void lab_set_remove(struct lab_set *set, uint32_t value);
-#include <wayland-server-protocol.h>
 struct view;
 struct seat;
 struct server;
@@ -468,14 +471,6 @@ bool cursor_process_button_release(struct seat *seat, uint32_t button, uint32_t 
 bool cursor_finish_button_release(struct seat *seat, uint32_t button);
 void cursor_init(struct seat *seat);
 void cursor_reload(struct seat *seat);
-void cursor_emulate_move(struct seat *seat,
-		struct wlr_input_device *device,
-		double dx, double dy, uint32_t time_msec);
-void cursor_emulate_move_absolute(struct seat *seat,
-		struct wlr_input_device *device,
-		double x, double y, uint32_t time_msec);
-void cursor_emulate_button(struct seat *seat,
-		uint32_t button, enum wl_pointer_button_state state, uint32_t time_msec);
 void cursor_emulate_axis(struct seat *seat,
 		struct wlr_input_device *device,
 		enum wl_pointer_axis orientation, double delta, double delta_discrete,
@@ -629,9 +624,6 @@ struct server {
 		struct wlr_ext_workspace_manager_v1 *ext_manager;
 		struct wlr_ext_workspace_group_handle_v1 *ext_group;
 		struct {
-			struct wl_listener layout_output_added;
-		} on;
-		struct {
 			struct wl_listener commit;
 		} on_ext_manager;
 	} workspaces;
@@ -685,7 +677,6 @@ void seat_finish(void);
 void seat_reconfigure(void);
 void seat_force_focus_surface(struct seat *seat, struct wlr_surface *surface);
 void seat_focus_surface(struct seat *seat, struct wlr_surface *surface);
-void seat_pointer_end_grab(struct seat *seat, struct wlr_surface *surface);
 void seat_focus_lock_surface(struct seat *seat, struct wlr_surface *surface);
 void seat_set_focus_layer(struct seat *seat, struct wlr_layer_surface_v1 *layer);
 void seat_output_layout_changed(struct seat *seat);
@@ -709,7 +700,6 @@ void server_finish(void);
 void create_constraint(struct wl_listener *listener, void *data);
 void constrain_cursor(struct wlr_pointer_constraint_v1
 	*constraint);
-#include <wayland-server.h>
 struct view;
 struct server;
 struct wl_list;
@@ -857,7 +847,6 @@ void ssd_update_geometry(struct ssd *ssd);
 void ssd_destroy(struct ssd *ssd);
 void ssd_set_titlebar(struct ssd *ssd, bool enabled);
 void ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable);
-void ssd_enable_shade(struct ssd *ssd, bool enable);
 void ssd_update_hovered_button(struct wlr_scene_node *node);
 void ssd_button_free(struct ssd_button *button);
 enum lab_node_type ssd_get_resizing_type(const struct ssd *ssd,
@@ -865,7 +854,6 @@ enum lab_node_type ssd_get_resizing_type(const struct ssd *ssd,
 enum lab_ssd_mode ssd_mode_parse(const char *mode);
 struct border ssd_thickness(struct view *view);
 struct wlr_box ssd_max_extents(struct view *view);
-#include <cairo.h>
 
 struct lab_img;
 enum lab_gradient {
@@ -915,7 +903,6 @@ struct theme {
 		struct theme_background title_bg;
 		float button_colors[LAB_NODE_BUTTON_LAST + 1][4];
 		float border_color[4];
-		float toggled_keybinds_color[4];
 		float label_text_color[4];
 		struct lab_img *button_imgs
 			[LAB_NODE_BUTTON_LAST + 1][LAB_BS_ALL + 1];
@@ -954,8 +941,6 @@ struct theme {
 };
 void theme_init(struct theme *theme);
 void theme_finish(struct theme *theme);
-#include <stdint.h>
-#include <wayland-util.h>
 #define LAB_MIN_VIEW_WIDTH 100
 #define LAB_MIN_VIEW_HEIGHT 60
 #define VIEW_FALLBACK_X 100
@@ -1050,7 +1035,6 @@ struct view {
 	uint64_t creation_id;
 	enum lab_ssd_mode ssd_mode;
 	enum ssd_preference ssd_preference;
-	bool shaded;
 	bool minimized;
 	bool was_minimized_by_show_desktop_action;
 	enum view_axis maximized;
@@ -1117,7 +1101,6 @@ struct view_query {
 	enum lab_window_type window_type;
 	char *sandbox_engine;
 	char *sandbox_app_id;
-	enum lab_tristate shaded;
 	enum view_axis maximized;
 	enum lab_tristate iconified;
 	enum lab_tristate focused;
@@ -1138,20 +1121,13 @@ struct xdg_toplevel_view {
 	struct wl_listener new_popup;
 };
 struct view *view_from_wlr_surface(struct wlr_surface *surface);
-struct view_query *view_query_create(void);
 void view_query_free(struct view_query *view);
 bool view_matches_query(struct view *view, struct view_query *query);
 #define for_each_view(view, head, criteria)           \
 	for (view = view_next(head, NULL, criteria);  \
 	     view;                                    \
 	     view = view_next(head, view, criteria))
-#define for_each_view_reverse(view, head, criteria)   \
-	for (view = view_prev(head, NULL, criteria);  \
-	     view;                                    \
-	     view = view_prev(head, view, criteria))
 struct view *view_next(struct wl_list *head, struct view *view,
-	enum lab_view_criteria criteria);
-struct view *view_prev(struct wl_list *head, struct view *view,
 	enum lab_view_criteria criteria);
 void view_array_append(struct wl_array *views,
 	enum lab_view_criteria criteria);
@@ -1184,7 +1160,6 @@ struct wlr_box view_get_fallback_natural_geometry(struct view *view);
 void view_store_natural_geometry(struct view *view);
 void view_apply_natural_geometry(struct view *view);
 int view_effective_height(struct view *view, bool use_pending);
-void view_center(struct view *view, const struct wlr_box *ref);
 bool view_compute_position_by_policy(struct view *view, struct wlr_box *geom,
 	bool allow_cursor, enum lab_placement_policy policy);
 void view_place_by_policy(struct view *view, bool allow_cursor,
@@ -1227,7 +1202,6 @@ bool view_has_strut_partial(struct view *view);
 void view_set_title(struct view *view, const char *title);
 void view_set_app_id(struct view *view, const char *app_id);
 void view_reload_ssd(struct view *view);
-void view_set_shade(struct view *view, bool shaded);
 struct view_size_hints view_get_size_hints(struct view *view);
 void view_adjust_size(struct view *view, int *w, int *h);
 void view_evacuate_region(struct view *view);
@@ -1239,8 +1213,6 @@ enum view_axis view_axis_parse(const char *direction);
 enum lab_placement_policy view_placement_parse(const char *policy);
 struct wlr_xdg_surface *xdg_surface_from_view(struct view *view);
 bool view_matches_criteria(struct view *view, enum lab_view_criteria criteria);
-#include <wayland-util.h>
-#include <wayland-server-core.h>
 struct seat;
 struct server;
 struct wlr_scene_tree;
@@ -1256,7 +1228,6 @@ void workspaces_switch_to(struct workspace *target, bool update_focus);
 void workspaces_destroy(void);
 struct workspace *workspaces_find(struct workspace *anchor, const char *name,
 	bool wrap);
-#include <cairo.h>
 struct lab_data_buffer {
 	struct wlr_buffer base;
 	bool surface_owns_data;
@@ -1280,9 +1251,6 @@ void box_union(struct wlr_box *box_dest, struct wlr_box *box_a,
 void box_center(int width, int height, const struct wlr_box *ref,
 	const struct wlr_box *bound, int *x, int *y);
 struct wlr_box box_fit_within(int width, int height, struct wlr_box *bound);
-struct wlr_fbox box_to_fbox(struct wlr_box *box);
-#include <cairo.h>
-#include <wayland-util.h>
 struct lab_img {
 	struct wl_array modifiers;
 	struct lab_img_data *data;
@@ -1297,14 +1265,12 @@ void lab_img_destroy(struct lab_img *img);
 bool lab_img_equal(struct lab_img *img_a, struct lab_img *img_b);
 void increase_nofile_limit(void);
 void restore_nofile_limit(void);
-#include <wayland-server-core.h>
 struct path {
 	char *string;
 	struct wl_list link;
 };
 void paths_config_create(struct wl_list *paths, const char *filename);
 void paths_destroy(struct wl_list *paths);
-#include <wayland-server-core.h>
 struct wlr_scene_tree;
 struct lab_scene_rect_options {
 	float **border_colors;
@@ -1336,10 +1302,8 @@ struct wlr_scene_rect *lab_wlr_scene_rect_create(struct wlr_scene_tree *parent,
 	int width, int height, const float color[static 4]);
 struct wlr_scene_buffer *lab_wlr_scene_buffer_create(
 	struct wlr_scene_tree *parent, struct wlr_buffer *buffer);
-struct wlr_scene_node *lab_wlr_scene_get_prev_node(struct wlr_scene_node *node);
 bool lab_wlr_scene_output_commit(struct wlr_scene_output *scene_output,
 	struct wlr_output_state *state);
-#include <wayland-server-core.h>
 struct wlr_scene_node;
 struct node_descriptor {
 	enum lab_node_type type;
@@ -1378,21 +1342,6 @@ void scaled_font_buffer_update(struct scaled_font_buffer *self,
 void scaled_font_buffer_update_markup(struct scaled_font_buffer *self,
 	const char *text, int max_width, struct font *font, const float *color,
 	const float *bg_color, bool use_markup);
-#include <assert.h>
-bool set_double(const char *str, double *val);
-static inline bool
-set_float(const char *str, float *val)
-{
-	assert(val);
-	double d;
-	if (set_double(str, &d)) {
-		*val = (float)d;
-		return true;
-	}
-	return false;
-}
-#include <stdint.h>
-#include <cairo.h>
 struct wlr_fbox;
 void set_cairo_color(cairo_t *cairo, const float *color);
 cairo_pattern_t *color_to_pattern(const float *color);
@@ -1403,8 +1352,6 @@ bool is_pattern_opaque(cairo_pattern_t *pattern);
 		(ptr) = NULL; \
 	} \
 } while (0)
-void draw_cairo_border(cairo_t *cairo, struct wlr_fbox fbox, double line_width);
-#include <wayland-server-core.h>
 #define LAB_SCALED_BUFFER_MAX_CACHE 2
 struct wlr_buffer;
 struct wlr_scene_tree;
@@ -1444,7 +1391,6 @@ struct scaled_buffer_cache_entry {
 };
 struct lab_data_buffer;
 struct lab_data_buffer *img_xbm_load_from_bitmap(const char *bitmap, float *rgba);
-#include <wayland-util.h>
 enum window_rule_event {
 	LAB_WINDOW_RULE_EVENT_ON_FIRST_MAP = 0,
 };
@@ -1489,13 +1435,11 @@ struct scaled_img_buffer {
 struct scaled_img_buffer *scaled_img_buffer_create(struct wlr_scene_tree *parent,
 	struct lab_img *img, int width, int height);
 bool match_glob(const char *pattern, const char *string);
-#include <wayland-server-core.h>
 struct seat;
 void dnd_init(struct seat *seat);
 void dnd_icons_show(struct seat *seat, bool show);
 void dnd_icons_move(struct seat *seat, double x, double y);
 void dnd_finish(struct seat *seat);
-#include <wayland-server-core.h>
 struct server;
 struct output;
 struct seat;
@@ -1526,7 +1470,6 @@ void layers_finish(void);
 void layers_arrange(struct output *output);
 void layer_try_set_focus(struct seat *seat,
 	struct wlr_layer_surface_v1 *layer_surface);
-#include <limits.h>
 struct border;
 struct output;
 struct server;
@@ -1585,7 +1528,6 @@ bool edges_traverse_edge(struct edge current, struct edge target, struct edge ed
 void edges_calculate_visibility(struct view *ignored_view);
 struct wl_display;
 struct wlr_seat;
-#include <wayland-util.h>
 enum mouse_event {
 	MOUSE_ACTION_NONE = 0,
 	MOUSE_ACTION_DOUBLECLICK,
@@ -1616,7 +1558,6 @@ enum mouse_event mousebind_event_from_str(const char *str);
 uint32_t mousebind_button_from_str(const char *str, uint32_t *modifiers);
 enum direction mousebind_direction_from_str(const char *str, uint32_t *modifiers);
 struct mousebind *mousebind_create(const char *context);
-bool mousebind_the_same(struct mousebind *a, struct mousebind *b);
 struct seat;
 void gestures_init(struct seat *seat);
 void gestures_finish(struct seat *seat);
@@ -1678,7 +1619,6 @@ void xwayland_adjust_usable_area(struct view *view,
 void xwayland_update_workarea(void);
 void xwayland_flush(void);
 #endif
-#include <wayland-server-core.h>
 struct keyboard;
 struct wlr_keyboard_key_event;
 struct input_method_relay {
@@ -1722,7 +1662,6 @@ struct input_method_relay *input_method_relay_create(struct seat *seat);
 void input_method_relay_finish(struct input_method_relay *relay);
 void input_method_relay_set_focus(struct input_method_relay *relay,
 	struct wlr_surface *surface);
-#include <wayland-util.h>
 #define MAX_KEYSYMS 32
 #define MAX_KEYCODES 16
 struct server;
@@ -1743,11 +1682,9 @@ struct keybind {
 struct keybind *keybind_create(const char *keybind);
 void keybind_destroy(struct keybind *keybind);
 uint32_t parse_modifier(const char *symname);
-bool keybind_the_same(struct keybind *a, struct keybind *b);
 bool keybind_contains_keycode(struct keybind *keybind, xkb_keycode_t keycode);
 bool keybind_contains_keysym(struct keybind *keybind, xkb_keysym_t keysym);
 void keybind_update_keycodes(void);
-#include <wayland-server-core.h>
 struct output;
 struct server;
 struct session_lock_manager {
@@ -1773,7 +1710,6 @@ void session_shutdown(void);
 struct output;
 void output_state_init(struct output *output);
 bool output_state_commit(struct output *output);
-#include <stdbool.h>
 struct view;
 bool placement_find_best(struct view *view, struct wlr_box *geometry);
 struct server;
@@ -1790,9 +1726,6 @@ void snap_constraints_invalidate(struct view *view);
 void snap_constraints_update(struct view *view);
 struct wlr_box snap_constraints_effective(struct view *view,
 	enum lab_edge direction, bool use_pending);
-#include <libinput.h>
-#include <string.h>
-#include <wayland-server-core.h>
 enum lab_libinput_device_type {
 	LAB_LIBINPUT_DEVICE_NONE = 0,
 	LAB_LIBINPUT_DEVICE_DEFAULT,
@@ -1822,8 +1755,6 @@ struct libinput_category {
 	double scroll_factor;
 	float calibration_matrix[6];
 };
-enum lab_libinput_device_type get_device_type(const char *s);
-const char *libinput_device_type_name(enum lab_libinput_device_type type);
 struct libinput_category *libinput_category_create(void);
 struct libinput_category *libinput_category_get_default(void);
 struct server;
@@ -1835,12 +1766,6 @@ void kde_server_decoration_update_default(void);
 void kde_server_decoration_set_view(struct view *view, struct wlr_surface *surface);
 void kde_server_decoration_finish(void);
 void xdg_server_decoration_finish(void);
-#include <wayland-server-core.h>
-static inline size_t
-wl_array_len(struct wl_array *array)
-{
-	return array->size / sizeof(const char *);
-}
 #define wl_array_for_each_reverse(pos, array)                                          \
 	for (pos = !(array)->data ? NULL                                               \
 		: (void *)((const char *)(array)->data + (array)->size - sizeof(pos)); \
@@ -1866,7 +1791,6 @@ struct ssd {
 	struct view *view;
 	struct wlr_scene_tree *tree;
 	struct {
-		bool was_shaded;
 		bool was_omnipresent;
 		bool was_maximized;
 		bool was_squared;
@@ -1930,7 +1854,6 @@ struct foreign_toplevel *foreign_toplevel_create(struct view *view);
 void foreign_toplevel_set_parent(struct foreign_toplevel *toplevel,
 	struct foreign_toplevel *parent);
 void foreign_toplevel_destroy(struct foreign_toplevel *toplevel);
-#include <wayland-server-core.h>
 struct wlr_foreign_toplevel {
 	struct view *view;
 	struct wlr_foreign_toplevel_handle_v1 *handle;
@@ -1957,7 +1880,6 @@ void wlr_foreign_toplevel_init(struct wlr_foreign_toplevel *wlr_toplevel,
 void wlr_foreign_toplevel_set_parent(struct wlr_foreign_toplevel *wlr_toplevel,
 	struct wlr_foreign_toplevel *parent);
 void wlr_foreign_toplevel_finish(struct wlr_foreign_toplevel *wlr_toplevel);
-#include <wayland-server-core.h>
 struct ext_foreign_toplevel {
 	struct view *view;
 	struct wlr_ext_foreign_toplevel_handle_v1 *handle;
@@ -1972,7 +1894,6 @@ struct ext_foreign_toplevel {
 void ext_foreign_toplevel_init(struct ext_foreign_toplevel *ext_toplevel,
 	struct view *view);
 void ext_foreign_toplevel_finish(struct ext_foreign_toplevel *ext_toplevel);
-#include <stddef.h>
 static struct key_combos {
 	const char *binding, *action;
 	struct {
@@ -2341,16 +2262,6 @@ static struct mouse_combos {
 		.action = "Unfocus",
 	}, {
 		.context = "Titlebar",
-		.button = "Up",
-		.event = "Scroll",
-		.action = "Shade",
-	}, {
-		.context = "Titlebar",
-		.button = "Down",
-		.event = "Scroll",
-		.action = "Unshade",
-	}, {
-		.context = "Titlebar",
 		.button = "Down",
 		.event = "Scroll",
 		.action = "Focus",
@@ -2402,11 +2313,6 @@ static struct mouse_combos {
 		.button = "Left",
 		.event = "Click",
 		.action = "ToggleMaximize",
-	}, {
-		.context = "Shade",
-		.button = "Left",
-		.event = "Click",
-		.action = "ToggleShade",
 	}, {
 		.context = "AllDesktops",
 		.button = "Left",
@@ -2490,11 +2396,6 @@ static struct mouse_combos {
 		.context = NULL,
 	},
 };
-#include <assert.h>
-#include <signal.h>
-#include <string.h>
-#include <strings.h>
-#include <unistd.h>
 enum LABWC_src_action_c_action_arg_type {
 	LAB_ACTION_ARG_STR = 0,
 	LAB_ACTION_ARG_BOOL,
@@ -2575,9 +2476,6 @@ struct LABWC_src_action_c_action_arg_list {
 	X(VIRTUAL_OUTPUT_REMOVE, "VirtualOutputRemove") \
 	X(AUTO_PLACE, "AutoPlace") \
 	X(TOGGLE_TEARING, "ToggleTearing") \
-	X(SHADE, "Shade") \
-	X(UNSHADE, "Unshade") \
-	X(TOGGLE_SHADE, "ToggleShade") \
 	X(ENABLE_SCROLL_WHEEL_EMULATION, "EnableScrollWheelEmulation") \
 	X(DISABLE_SCROLL_WHEEL_EMULATION, "DisableScrollWheelEmulation") \
 	X(TOGGLE_SCROLL_WHEEL_EMULATION, "ToggleScrollWheelEmulation") \
@@ -2633,27 +2531,6 @@ LABWC_src_action_c_action_arg_add_int(struct action *action, const char *key, in
 	arg->base.key = xstrdup(key);
 	arg->value = value;
 	wl_list_append(&action->args, &arg->base.link);
-}
-static void
-LABWC_src_action_c_action_arg_add_list(struct action *action, const char *key, enum LABWC_src_action_c_action_arg_type type)
-{
-	assert(action);
-	assert(key);
-	struct LABWC_src_action_c_action_arg_list *arg = znew(*arg);
-	arg->base.type = type;
-	arg->base.key = xstrdup(key);
-	wl_list_init(&arg->value);
-	wl_list_append(&action->args, &arg->base.link);
-}
-void
-action_arg_add_querylist(struct action *action, const char *key)
-{
-	LABWC_src_action_c_action_arg_add_list(action, key, LAB_ACTION_ARG_QUERY_LIST);
-}
-void
-action_arg_add_actionlist(struct action *action, const char *key)
-{
-	LABWC_src_action_c_action_arg_add_list(action, key, LAB_ACTION_ARG_ACTION_LIST);
 }
 static void *
 LABWC_src_action_c_action_get_arg(struct action *action, const char *key, enum LABWC_src_action_c_action_arg_type type)
@@ -3458,7 +3335,6 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 				.width = width ? : view->pending.width,
 				.height = height ? : view->pending.height,
 			};
-			view_set_shade(view, false);
 			view_move_resize(view, box);
 		}
 		break;
@@ -3652,21 +3528,6 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 			}
 		}
 		break;
-	case ACTION_TYPE_TOGGLE_SHADE:
-		if (view) {
-			view_set_shade(view, !view->shaded);
-		}
-		break;
-	case ACTION_TYPE_SHADE:
-		if (view) {
-			view_set_shade(view, true);
-		}
-		break;
-	case ACTION_TYPE_UNSHADE:
-		if (view) {
-			view_set_shade(view, false);
-		}
-		break;
 	case ACTION_TYPE_ENABLE_SCROLL_WHEEL_EMULATION:
 		server.seat.cursor_scroll_wheel_emulation = true;
 		break;
@@ -3711,18 +3572,12 @@ actions_run(struct view *activator, struct wl_list *actions, struct cursor_conte
 	}
 	struct action *action;
 	wl_list_for_each(action, actions, link) {
-		if (false) {
-			continue;
-		}
 		struct view *view = LABWC_src_action_c_view_for_action(activator, action, &ctx);
 		LABWC_src_action_c_run_action(view, action, &ctx);
 	}
 }
 #undef ACTION_TYPE_LIST
 #undef X
-#include <assert.h>
-#include <stdlib.h>
-#include <drm_fourcc.h>
 static struct lab_data_buffer *LABWC_src_buffer_c_data_buffer_from_buffer(
 	struct wlr_buffer *buffer);
 static void
@@ -3847,13 +3702,6 @@ buffer_resize(struct lab_data_buffer *src_buffer, int width, int height,
 	cairo_destroy(cairo);
 	return buffer;
 }
-#include <assert.h>
-#include <fcntl.h>
-#include <glib.h>
-#include <signal.h>
-#include <stdio.h>
-#include <sys/wait.h>
-#include <unistd.h>
 static void
 LABWC_src_common_spawn_c_reset_signals_and_limits(void)
 {
@@ -3862,19 +3710,6 @@ LABWC_src_common_spawn_c_reset_signals_and_limits(void)
 	sigemptyset(&set);
 	sigprocmask(SIG_SETMASK, &set, NULL);
 	signal(SIGPIPE, SIG_DFL);
-}
-static bool
-LABWC_src_common_spawn_c_set_cloexec(int fd)
-{
-	int flags = fcntl(fd, F_GETFD);
-	if (flags == -1) {
-		return false;
-	}
-	flags = flags | FD_CLOEXEC;
-	if (fcntl(fd, F_SETFD, flags) == -1) {
-		return false;
-	}
-	return true;
 }
 void
 spawn_async_no_shell(char const *command)
@@ -3963,51 +3798,6 @@ spawn_primary_client(const char *command)
 		return child;
 	}
 }
-pid_t
-spawn_piped(const char *command, int *pipe_fd)
-{
-	assert(command);
-	int pipe_rw[2];
-	if (pipe(pipe_rw) != 0) {
-		return -1;
-	}
-	pid_t pid = fork();
-	if (pid < 0) {
-		close(pipe_rw[0]);
-		close(pipe_rw[1]);
-		return pid;
-	}
-	if (pid == 0) {
-		LABWC_src_common_spawn_c_reset_signals_and_limits();
-		dup2(pipe_rw[1], STDOUT_FILENO);
-		close(pipe_rw[0]);
-		close(pipe_rw[1]);
-		int dev_null = open("/dev/null", O_RDWR);
-		if (dev_null < 0) {
-			close(STDIN_FILENO);
-			close(STDERR_FILENO);
-		} else {
-			dup2(dev_null, STDIN_FILENO);
-			dup2(dev_null, STDERR_FILENO);
-			close(dev_null);
-		}
-		execl("/bin/sh", "sh", "-c", command, NULL);
-		_exit(1);
-	}
-	close(pipe_rw[1]);
-	LABWC_src_common_spawn_c_set_cloexec(pipe_rw[0]);
-	*pipe_fd = pipe_rw[0];
-	return pid;
-}
-void
-spawn_piped_close(pid_t pid, int pipe_fd)
-{
-	close(pipe_fd);
-}
-#include <assert.h>
-#include <glib.h>
-#include <stdio.h>
-#include <stdlib.h>
 struct LABWC_src_common_dir_c_dir {
 	const char *prefix;
 	const char *default_prefix;
@@ -4096,14 +3886,7 @@ paths_destroy(struct wl_list *paths)
 		free(path);
 	}
 }
-#include <assert.h>
-#include <ctype.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-#include <strings.h>
-enum LABWC_src_common_string_helpers_c_str_flags {
+enum {
 	STR_FLAG_NONE = 0,
 	STR_FLAG_IGNORE_CASE,
 };
@@ -4242,36 +4025,10 @@ str_endswith(const char * const string, const char * const suffix)
 	return LABWC_src_common_string_helpers_c__str_endswith(string, suffix, STR_FLAG_NONE);
 }
 bool
-str_endswith_ignore_case(const char * const string, const char * const suffix)
-{
-	return LABWC_src_common_string_helpers_c__str_endswith(string, suffix, STR_FLAG_IGNORE_CASE);
-}
-bool
-str_starts_with(const char *s, char needle, const char *ignore_chars)
-{
-	return (s + strspn(s, ignore_chars))[0] == needle;
-}
-bool
 str_equal(const char *a, const char *b)
 {
 	return a == b || (a && b && !strcmp(a, b));
 }
-bool
-str_space_only(const char *s)
-{
-	for (; *s; s++) {
-		if (!isspace(*s)) {
-			return false;
-		}
-	}
-	return true;
-}
-#include <assert.h>
-#include <ctype.h>
-#include <stdarg.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
 void
 buf_expand_tilde(struct buf *s)
 {
@@ -4370,20 +4127,6 @@ buf_add_fmt(struct buf *s, const char *fmt, ...)
 	s->data[s->len] = 0;
 }
 void
-buf_add_hex_color(struct buf *s, float color[4])
-{
-	float alpha = color[3];
-	if (alpha == 0.0f) {
-		buf_add(s, "#00000000");
-		return;
-	}
-	buf_add_fmt(s, "#%02x%02x%02x%02x",
-		(int)(color[0] / alpha * 255),
-		(int)(color[1] / alpha * 255),
-		(int)(color[2] / alpha * 255),
-		(int)(alpha * 255));
-}
-void
 buf_add(struct buf *s, const char *data)
 {
 	if (string_null_or_empty(data)) {
@@ -4430,35 +4173,6 @@ buf_move(struct buf *dst, struct buf *src)
 	*dst = *src;
 	*src = BUF_INIT;
 }
-struct buf
-buf_from_file(const char *filename)
-{
-	struct buf buf = BUF_INIT;
-	FILE *stream = fopen(filename, "r");
-	if (!stream) {
-		return buf;
-	}
-	if (fseek(stream, 0, SEEK_END) == -1) {
-		fclose(stream);
-		return buf;
-	}
-	long size = ftell(stream);
-	if (size == -1) {
-		fclose(stream);
-		return buf;
-	}
-	rewind(stream);
-	LABWC_src_common_buf_c_buf_expand(&buf, (int)(size + 1));
-	if (fread(buf.data, 1, (size_t)size, stream) == (size_t)size) {
-		buf.len = (int)size;
-		buf.data[size] = '\0';
-	} else {
-		buf_reset(&buf);
-	}
-	fclose(stream);
-	return buf;
-}
-#include <strings.h>
 enum lab_tristate
 parse_tristate(const char *str)
 {
@@ -4493,25 +4207,6 @@ parse_bool(const char *str, int default_value)
 	}
 	return (val == LAB_STATE_ENABLED) ? 1 : 0;
 }
-void
-set_bool(const char *str, bool *variable)
-{
-	int ret = parse_bool(str, -1);
-	if (ret < 0) {
-		return;
-	}
-	*variable = ret;
-}
-void
-set_bool_as_int(const char *str, int *variable)
-{
-	int ret = parse_bool(str, -1);
-	if (ret < 0) {
-		return;
-	}
-	*variable = ret;
-}
-#include <sys/resource.h>
 static struct rlimit LABWC_src_common_fd_util_c_original_nofile_rlimit = {0};
 void
 increase_nofile_limit(void)
@@ -4533,82 +4228,6 @@ restore_nofile_limit(void)
 	if (setrlimit(RLIMIT_NOFILE, &LABWC_src_common_fd_util_c_original_nofile_rlimit) != 0) {
 	}
 }
-#include <locale.h>
-#include <stdlib.h>
-struct LABWC_src_common_parse_double_c_dec_separator {
-	int index;
-	bool multiple;
-};
-struct LABWC_src_common_parse_double_c_converted_double {
-	double value;
-	bool valid;
-};
-static struct LABWC_src_common_parse_double_c_dec_separator
-LABWC_src_common_parse_double_c_find_dec_separator(const char *str)
-{
-	struct LABWC_src_common_parse_double_c_dec_separator loc = {
-		.index = -1,
-		.multiple = false
-	};
-	for (int i = 0; *str; i++, str++) {
-		switch (*str) {
-		case ',':
-		case '.':
-			if (loc.index >= 0) {
-				loc.multiple = true;
-				return loc;
-			} else {
-				loc.index = i;
-			}
-			break;
-		}
-	}
-	return loc;
-}
-static struct LABWC_src_common_parse_double_c_converted_double
-LABWC_src_common_parse_double_c_convert_double(const char *str)
-{
-	struct LABWC_src_common_parse_double_c_converted_double result = {
-		.value = 0,
-		.valid = true,
-	};
-	char *eptr = NULL;
-	errno = 0;
-	result.value = strtod(str, &eptr);
-	if (errno) {
-		result.valid = false;
-	}
-	if (*eptr) {
-		result.valid = false;
-	}
-	return result;
-}
-bool
-set_double(const char *str, double *val)
-{
-	assert(str);
-	assert(val);
-	struct LABWC_src_common_parse_double_c_dec_separator dloc = LABWC_src_common_parse_double_c_find_dec_separator(str);
-	if (dloc.multiple) {
-		return false;
-	}
-	char *lstr = NULL;
-	if (dloc.index >= 0) {
-		lstr = xstrdup(str);
-		struct lconv *lc = localeconv();
-		lstr[dloc.index] = *lc->decimal_point;
-		str = lstr;
-	}
-	struct LABWC_src_common_parse_double_c_converted_double conv = LABWC_src_common_parse_double_c_convert_double(str);
-	if (conv.valid) {
-		*val = conv.value;
-	}
-	free(lstr);
-	return conv.valid;
-}
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
 void
 die_if_null(void *ptr)
 {
@@ -4646,9 +4265,6 @@ xstrdup(const char *str)
 	die_if_null(copy);
 	return copy;
 }
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
 static struct lab_data_buffer *
 LABWC_src_scaled_buffer_scaled_font_buffer_c__create_buffer(struct scaled_buffer *scaled_buffer, double scale)
 {
@@ -4749,9 +4365,6 @@ scaled_font_buffer_update_markup(struct scaled_font_buffer *self, const char *te
 {
 	LABWC_src_scaled_buffer_scaled_font_buffer_c__scaled_font_buffer_update(self, text, max_width, font, color, bg_color, use_markup);
 }
-#include <assert.h>
-#include <stdlib.h>
-#include <wayland-server-core.h>
 static struct wl_list LABWC_src_scaled_buffer_scaled_buffer_c_all_scaled_buffers = WL_LIST_INIT(&LABWC_src_scaled_buffer_scaled_buffer_c_all_scaled_buffers);
 static void
 LABWC_src_scaled_buffer_scaled_buffer_c__cache_entry_destroy(struct scaled_buffer_cache_entry *cache_entry, bool drop_buffer)
@@ -4924,8 +4537,6 @@ scaled_buffer_invalidate_sharing(void)
 		wl_list_init(&scene_buffer->link);
 	}
 }
-#include <assert.h>
-#include <stdint.h>
 #define LABWC_BUILTIN_ICON_SIZE (6)
 static uint32_t
 LABWC_src_img_img_xbm_c_argb32(float *rgba)
@@ -4956,7 +4567,6 @@ img_xbm_load_from_bitmap(const char *bitmap, float *rgba)
 		(uint32_t)(size * 4));
 }
 #undef LABWC_BUILTIN_ICON_SIZE
-#include <assert.h>
 struct lab_img_data {
 	int refcount;
 	struct lab_data_buffer *buffer;
@@ -5043,7 +4653,6 @@ lab_img_equal(struct lab_img *img_a, struct lab_img *img_b)
 		|| !memcmp(img_a->modifiers.data, img_b->modifiers.data,
 			img_a->modifiers.size);
 }
-#include <assert.h>
 static struct lab_data_buffer *
 LABWC_src_scaled_buffer_scaled_img_buffer_c__create_buffer(struct scaled_buffer *scaled_buffer, double scale)
 {
@@ -5093,13 +4702,11 @@ scaled_img_buffer_create(struct wlr_scene_tree *parent, struct lab_img *img,
 	scaled_buffer_request_update(scaled_buffer, width, height);
 	return self;
 }
-#include <fnmatch.h>
 bool
 match_glob(const char *pattern, const char *string)
 {
 	return fnmatch(pattern, string, FNM_CASEFOLD) == 0;
 }
-#include <strings.h>
 enum lab_node_type
 node_type_parse(const char *context)
 {
@@ -5111,8 +4718,6 @@ node_type_parse(const char *context)
 		return LAB_NODE_BUTTON_ICONIFY;
 	} else if (!strcasecmp(context, "WindowMenu")) {
 		return LAB_NODE_BUTTON_WINDOW_MENU;
-	} else if (!strcasecmp(context, "Shade")) {
-		return LAB_NODE_BUTTON_SHADE;
 	} else if (!strcasecmp(context, "AllDesktops")) {
 		return LAB_NODE_BUTTON_OMNIPRESENT;
 	} else if (!strcasecmp(context, "Titlebar")
@@ -5158,9 +4763,6 @@ node_type_contains(enum lab_node_type whole, enum lab_node_type part)
 	if (whole == LAB_NODE_BUTTON) {
 		return part >= LAB_NODE_BUTTON_FIRST
 			&& part <= LAB_NODE_BUTTON_LAST;
-	}
-	if (whole == LAB_NODE_TITLEBAR) {
-		return part == LAB_NODE_TITLEBAR;
 	}
 	if (whole == LAB_NODE_FRAME) {
 		return part >= LAB_NODE_BUTTON_FIRST
@@ -5212,8 +4814,6 @@ node_type_to_edges(enum lab_node_type type)
 		return LAB_EDGE_NONE;
 	}
 }
-#include <assert.h>
-#include <strings.h>
 static_assert((int)LAB_EDGE_TOP == (int)WLR_EDGE_TOP
 		&& (int)LAB_EDGE_BOTTOM == (int)WLR_EDGE_BOTTOM
 		&& (int)LAB_EDGE_LEFT == (int)WLR_EDGE_LEFT
@@ -5288,7 +4888,6 @@ lab_edge_invert(enum lab_edge edge)
 		return LAB_EDGE_NONE;
 	}
 }
-#include <assert.h>
 struct border_scene {
 	struct wlr_scene_tree *tree;
 	struct wlr_scene_rect *top, *bottom, *left, *right;
@@ -5361,7 +4960,6 @@ lab_scene_rect_set_size(struct lab_scene_rect *rect, int width, int height)
 		wlr_scene_rect_set_size(rect->fill, width, height);
 	}
 }
-#include <assert.h>
 struct wlr_surface *
 lab_wlr_surface_from_node(struct wlr_scene_node *node)
 {
@@ -5401,17 +4999,6 @@ lab_wlr_scene_buffer_create(struct wlr_scene_tree *parent,
 	die_if_null(scene_buffer);
 	return scene_buffer;
 }
-struct wlr_scene_node *
-lab_wlr_scene_get_prev_node(struct wlr_scene_node *node)
-{
-	assert(node);
-	struct wlr_scene_node *prev;
-	prev = wl_container_of(node->link.prev, node, link);
-	if (&prev->link == &node->parent->children) {
-		return NULL;
-	}
-	return prev;
-}
 bool
 lab_wlr_scene_output_commit(struct wlr_scene_output *scene_output,
 		struct wlr_output_state *state)
@@ -5445,21 +5032,6 @@ lab_wlr_scene_output_commit(struct wlr_scene_output *scene_output,
 		return false;
 	}
 	return true;
-}
-#include <cairo.h>
-#include <glib.h>
-void
-draw_cairo_border(cairo_t *cairo, struct wlr_fbox fbox, double line_width)
-{
-	cairo_save(cairo);
-	fbox.x += line_width / 2.0;
-	fbox.y += line_width / 2.0;
-	fbox.width -= line_width;
-	fbox.height -= line_width;
-	cairo_set_line_width(cairo, line_width);
-	cairo_rectangle(cairo, fbox.x, fbox.y, fbox.width, fbox.height);
-	cairo_stroke(cairo);
-	cairo_restore(cairo);
 }
 void
 set_cairo_color(cairo_t *cairo, const float *color)
@@ -5504,8 +5076,6 @@ is_pattern_opaque(cairo_pattern_t *pattern)
 	}
 	return false;
 }
-#include <cairo.h>
-#include <pango/pangocairo.h>
 PangoFontDescription *
 font_to_pango_desc(struct font *font)
 {
@@ -5660,7 +5230,6 @@ lab_set_remove(struct lab_set *set, uint32_t value)
 		}
 	}
 }
-#include <assert.h>
 #if HAVE_XWAYLAND
 #endif
 void
@@ -5729,9 +5298,6 @@ LABWC_src_desktop_c_desktop_focus_view_internal(struct view *view, bool raise, b
 {
 	assert(view);
 	if (!view->surface) {
-		return;
-	}
-	if (false) {
 		return;
 	}
 	if (view->minimized) {
@@ -5941,7 +5507,6 @@ get_cursor_context(void)
 	}
 	return ret;
 }
-#include <assert.h>
 static void
 LABWC_src_dnd_c_handle_drag_request(struct wl_listener *listener, void *data)
 {
@@ -6019,15 +5584,12 @@ void dnd_finish(struct seat *seat)
 	wl_list_remove(&seat->drag.events.request.link);
 	wl_list_remove(&seat->drag.events.start.link);
 }
-#include <assert.h>
-#include <limits.h>
-#include <pixman.h>
 static void
 LABWC_src_edges_c_edges_for_target_geometry(struct border *edges, struct view *view,
 		struct wlr_box target)
 {
 	struct border border = ssd_get_margin(view->ssd);
-	int eff_height = view->shaded ? 0 : target.height;
+	int eff_height = target.height;
 	edges->left = target.x - border.left - rc.gap;
 	edges->top = target.y - border.top - rc.gap;
 	edges->right = target.x + target.width + border.right + rc.gap;
@@ -6443,8 +6005,6 @@ edges_traverse_edge(struct edge current, struct edge target, struct edge obstacl
 #define handle_request_set_primary_selection LABWC_src_input_cursor_c_handle_request_set_primary_selection
 #define handle_request_set_selection LABWC_src_input_cursor_c_handle_request_set_selection
 #define handle_request_set_shape LABWC_src_input_cursor_c_handle_request_set_shape
-#include <assert.h>
-#include <time.h>
 #if WLR_HAS_LIBINPUT_BACKEND
 #endif
 #define LAB_CURSOR_SHAPE_V1_VERSION 1
@@ -6609,7 +6169,6 @@ LABWC_src_input_cursor_c_process_cursor_move(uint32_t time)
 			.height = view->natural_geometry.height,
 		};
 		interactive_anchor_to_cursor(&new_geo);
-		view_set_shade(view, false);
 		view_set_maximized(view, VIEW_AXIS_NONE);
 		view_set_untiled(view);
 		view_move_resize(view, new_geo);
@@ -6821,9 +6380,6 @@ LABWC_src_input_cursor_c_cursor_update_common(const struct cursor_context *ctx,
 		wlr_seat_pointer_notify_clear_focus(wlr_seat);
 		if (!seat->drag.active) {
 			enum lab_cursors cursor = LABWC_src_input_cursor_c_cursor_get_from_ssd(ctx->type);
-			if (ctx->view && ctx->view->shaded && cursor > LAB_CURSOR_GRAB) {
-				cursor = LAB_CURSOR_DEFAULT;
-			}
 			cursor_set(seat, cursor);
 		}
 	}
@@ -7113,9 +6669,6 @@ LABWC_src_input_cursor_c_handle_motion_absolute(struct wl_listener *listener, vo
 static void
 LABWC_src_input_cursor_c_process_release_mousebinding(struct cursor_context *ctx, uint32_t button)
 {
-	if (false) {
-		return;
-	}
 	struct mousebind *mousebind;
 	uint32_t modifiers = keyboard_get_all_modifiers(&server.seat);
 	wl_list_for_each(mousebind, &rc.mousebinds, link) {
@@ -7173,9 +6726,6 @@ static bool
 LABWC_src_input_cursor_c_process_press_mousebinding(struct cursor_context *ctx,
 		uint32_t button)
 {
-	if (false) {
-		return false;
-	}
 	struct mousebind *mousebind;
 	bool double_click = LABWC_src_input_cursor_c_is_double_click(rc.doubleclick_time, button, ctx);
 	bool consumed_by_frame_context = false;
@@ -7470,58 +7020,6 @@ cursor_emulate_axis(struct seat *seat, struct wlr_input_device *device,
 	}
 	wlr_seat_pointer_notify_frame(seat->wlr_seat);
 }
-void
-cursor_emulate_move(struct seat *seat, struct wlr_input_device *device,
-		double dx, double dy, uint32_t time_msec)
-{
-	if (!dx && !dy) {
-		return;
-	}
-	wlr_relative_pointer_manager_v1_send_relative_motion(
-		server.relative_pointer_manager,
-		seat->wlr_seat, (uint64_t)time_msec * 1000,
-		dx, dy, dx, dy);
-	wlr_cursor_move(seat->cursor, device, dx, dy);
-	double sx, sy;
-	bool notify = cursor_process_motion(time_msec, &sx, &sy);
-	if (notify) {
-		wlr_seat_pointer_notify_motion(seat->wlr_seat, time_msec, sx, sy);
-	}
-	wlr_seat_pointer_notify_frame(seat->wlr_seat);
-}
-void
-cursor_emulate_move_absolute(struct seat *seat, struct wlr_input_device *device,
-		double x, double y, uint32_t time_msec)
-{
-	double lx, ly;
-	wlr_cursor_absolute_to_layout_coords(seat->cursor,
-		device, x, y, &lx, &ly);
-	double dx = lx - seat->cursor->x;
-	double dy = ly - seat->cursor->y;
-	cursor_emulate_move(seat, device, dx, dy, time_msec);
-}
-void
-cursor_emulate_button(struct seat *seat, uint32_t button,
-		enum wl_pointer_button_state state, uint32_t time_msec)
-{
-	bool notify;
-	switch (state) {
-	case WL_POINTER_BUTTON_STATE_PRESSED:
-		notify = cursor_process_button_press(seat, button, time_msec);
-		if (notify) {
-			wlr_seat_pointer_notify_button(seat->wlr_seat, time_msec, button, state);
-		}
-		break;
-	case WL_POINTER_BUTTON_STATE_RELEASED:
-		notify = cursor_process_button_release(seat, button, time_msec);
-		if (notify) {
-			wlr_seat_pointer_notify_button(seat->wlr_seat, time_msec, button, state);
-		}
-		cursor_finish_button_release(seat, button);
-		break;
-	}
-	wlr_seat_pointer_notify_frame(seat->wlr_seat);
-}
 static void
 LABWC_src_input_cursor_c_cursor_load(struct seat *seat)
 {
@@ -7709,7 +7207,6 @@ gestures_finish(struct seat *seat)
 #undef handle_swipe_begin
 #undef handle_swipe_end
 #undef handle_swipe_update
-#include <assert.h>
 #define SAME_CLIENT(wlr_obj1, wlr_obj2) \
 	(wl_resource_get_client((wlr_obj1)->resource) \
 	== wl_resource_get_client((wlr_obj2)->resource))
@@ -8192,8 +7689,6 @@ input_handlers_finish(struct seat *seat)
 	cursor_finish(seat);
 	keyboard_group_finish(seat);
 }
-#include <stdbool.h>
-#include <stdint.h>
 static struct lab_set LABWC_src_input_key_state_c_pressed, LABWC_src_input_key_state_c_bound, LABWC_src_input_key_state_c_pressed_sent;
 static bool LABWC_src_input_key_state_c_show_debug_indicator;
 static struct indicator_state {
@@ -8367,15 +7862,8 @@ key_state_bound_key_remove(uint32_t keycode)
 {
 	lab_set_remove(&LABWC_src_input_key_state_c_bound, keycode);
 }
-int
-key_state_nr_bound_keys(void)
-{
-	return LABWC_src_input_key_state_c_bound.size;
-}
 #define handle_key LABWC_src_input_keyboard_c_handle_key
 #define handle_modifiers LABWC_src_input_keyboard_c_handle_modifiers
-#include <assert.h>
-#include <stdlib.h>
 #if WLR_HAS_SESSION
 #endif
 enum LABWC_src_input_keyboard_c_lab_key_handled {
@@ -8687,13 +8175,10 @@ LABWC_src_input_keyboard_c_handle_compositor_keybindings(struct keyboard *keyboa
 		key_state_store_pressed_key_as_bound(event->keycode);
 		return LAB_KEY_HANDLED_TRUE_AND_VT_CHANGED;
 	}
-	if (!locked) {
-		if (server.input_mode == LAB_INPUT_STATE_MENU) {
-			key_state_store_pressed_key_as_bound(event->keycode);
-			LABWC_src_input_keyboard_c_handle_menu_keys(&keyinfo.translated);
-			return LAB_KEY_HANDLED_TRUE;
-		} else if (false) {
-		}
+	if (!locked && server.input_mode == LAB_INPUT_STATE_MENU) {
+		key_state_store_pressed_key_as_bound(event->keycode);
+		LABWC_src_input_keyboard_c_handle_menu_keys(&keyinfo.translated);
+		return LAB_KEY_HANDLED_TRUE;
 	}
 	LABWC_src_input_keyboard_c_cur_keybind = LABWC_src_input_keyboard_c_match_keybinding(&keyinfo, keyboard->is_virtual);
 	if (LABWC_src_input_keyboard_c_cur_keybind && (!locked || LABWC_src_input_keyboard_c_cur_keybind->allow_when_locked)) {
@@ -8897,10 +8382,6 @@ keyboard_group_finish(struct seat *seat)
 }
 #undef handle_key
 #undef handle_modifiers
-#include <assert.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <strings.h>
 #define LAB_LAYERSHELL_VERSION 4
 static void
 LABWC_src_layers_c_apply_override(struct output *output, struct wlr_box *usable_area)
@@ -9343,10 +8824,6 @@ layers_finish(void)
 	wl_list_remove(&server.new_layer_surface.link);
 }
 #undef LAB_LAYERSHELL_VERSION
-#include <getopt.h>
-#include <pango/pangocairo.h>
-#include <signal.h>
-#include <unistd.h>
 struct rcxml rc = { 0 };
 struct server server = { 0 };
 static const struct option LABWC_src_main_c_long_options[] = {
@@ -9447,8 +8924,6 @@ LABWC_src_main_c_idle_callback(void *data)
 	}
 }
 #undef FEATURE_ENABLED
-#include <assert.h>
-#include <stdlib.h>
 static void
 LABWC_src_node_c_handle_node_destroy(struct wl_listener *listener, void *data)
 {
@@ -9529,7 +9004,6 @@ output_state_commit(struct output *output)
 	}
 	return committed;
 }
-#include <stdlib.h>
 static struct wlr_output *LABWC_src_output_virtual_c_fallback_output = NULL;
 void
 output_virtual_add(const char *output_name,
@@ -9597,9 +9071,6 @@ output_virtual_update_fallback(void)
 		wlr_output_destroy(wlr_output);
 	}
 }
-#include <assert.h>
-#include <glib.h>
-#include <strings.h>
 #if WLR_HAS_DRM_BACKEND
 #else
 	#define wlr_output_is_drm(output) (false)
@@ -10272,7 +9743,6 @@ handle_output_power_manager_set_mode(struct wl_listener *listener, void *data)
 	}
 }
 #undef wlr_output_is_drm
-#include <assert.h>
 static void
 LABWC_src_overlay_c_show_overlay(struct seat *seat, struct theme_snapping_overlay *overlay_theme,
 		struct wlr_box *box)
@@ -10406,9 +9876,6 @@ overlay_finish(struct seat *seat)
 	}
 	seat->overlay = (struct overlay){0};
 }
-#include <assert.h>
-#include <limits.h>
-#include <stdbool.h>
 #define overlap_bitmap_index(bmp, i, j) \
 	(bmp)->grid[(i) * ((bmp)->nr_cols - 1) + (j)]
 struct LABWC_src_placement_c_overlap_bitmap {
@@ -10681,10 +10148,6 @@ final_placement:
 	return true;
 }
 #undef overlap_bitmap_index
-#include <assert.h>
-#include <float.h>
-#include <math.h>
-#include <string.h>
 bool
 regions_should_snap(void)
 {
@@ -10853,7 +10316,6 @@ resize_outlines_finish(struct view *view)
 	wlr_scene_node_set_enabled(
 		&view->resize_outlines.rect->tree->node, false);
 }
-#include <assert.h>
 static void
 LABWC_src_resistance_c_check_edge(int *next, struct edge current, struct edge target,
 		struct edge oppose, struct edge align, int tolerance, bool lesser)
@@ -10952,7 +10414,6 @@ void
 resistance_resize_apply(struct view *view, struct wlr_box *new_geom)
 {
 	assert(view);
-	assert(!view->shaded);
 	struct border next_edges;
 	edges_initialize(&next_edges);
 	enum lab_edge resize_edges = server.resize_edges;
@@ -10974,9 +10435,6 @@ resistance_resize_apply(struct view *view, struct wlr_box *new_geom)
 #define handle_new_input LABWC_src_seat_c_handle_new_input
 #define handle_new_virtual_keyboard LABWC_src_seat_c_handle_new_virtual_keyboard
 #define handle_new_virtual_pointer LABWC_src_seat_c_handle_new_virtual_pointer
-#include <assert.h>
-#include <stdbool.h>
-#include <strings.h>
 #if WLR_HAS_LIBINPUT_BACKEND
 #else
 	#define wlr_input_device_is_libinput(device) (false)
@@ -11391,18 +10849,6 @@ LABWC_src_seat_c_configure_keyboard(struct seat *seat, struct input *input)
 	keyboard_configure(seat, kb, keyboard->is_virtual);
 }
 void
-seat_pointer_end_grab(struct seat *seat, struct wlr_surface *surface)
-{
-	if (!surface || !wlr_seat_pointer_has_grab(seat->wlr_seat)) {
-		return;
-	}
-	struct wlr_xdg_surface *xdg_surface =
-		wlr_xdg_surface_try_from_wlr_surface(surface);
-	if (!xdg_surface || xdg_surface->role != WLR_XDG_SURFACE_ROLE_POPUP) {
-		wlr_seat_pointer_end_grab(seat->wlr_seat);
-	}
-}
-void
 seat_reconfigure(void)
 {
 	struct seat *seat = &server.seat;
@@ -11560,10 +11006,6 @@ seat_focus_override_end(struct seat *seat, bool restore_focus)
 #undef handle_new_virtual_keyboard
 #undef handle_new_virtual_pointer
 #undef wlr_input_device_is_libinput
-#include <assert.h>
-#include <signal.h>
-#include <string.h>
-#include <sys/wait.h>
 #if HAVE_XWAYLAND
 #endif
 #if WLR_HAS_DRM_BACKEND
@@ -12012,7 +11454,6 @@ server_finish(void)
 #undef LAB_WLR_COMPOSITOR_VERSION
 #undef LAB_WLR_LINUX_DMABUF_VERSION
 #undef LAB_WLR_PRESENTATION_TIME_VERSION
-#include <assert.h>
 struct LABWC_src_session_lock_c_session_lock_output {
 	struct wlr_scene_tree *tree;
 	struct wlr_scene_rect *background;
@@ -12368,8 +11809,6 @@ show_desktop_reset(void)
 		view->was_minimized_by_show_desktop_action = false;
 	}
 }
-#include <assert.h>
-#include <string.h>
 static struct {
 	struct view *view;
 	bool pending;
@@ -12493,7 +11932,6 @@ snap_constraints_effective(struct view *view, enum lab_edge resize_edges,
 	}
 	return geom;
 }
-#include <assert.h>
 static void
 LABWC_src_snap_c_check_edge(int *next, struct edge current, struct edge target,
 		struct edge oppose, struct edge align, bool lesser)
@@ -12573,7 +12011,6 @@ snap_grow_to_next_edge(struct view *view,
 		enum lab_edge direction, struct wlr_box *geo)
 {
 	assert(view);
-	assert(!view->shaded);
 	*geo = view->pending;
 	struct output *output = view->output;
 	if (!output_is_usable(output)) {
@@ -12631,7 +12068,6 @@ snap_shrink_to_next_edge(struct view *view,
 		enum lab_edge direction, struct wlr_box *geo)
 {
 	assert(view);
-	assert(!view->shaded);
 	*geo = view->pending;
 	enum lab_edge resize_edges;
 	switch (direction) {
@@ -12673,7 +12109,6 @@ snap_shrink_to_next_edge(struct view *view,
 		resize_edges, geo,   true);
 	snap_constraints_set(view, resize_edges, *geo);
 }
-#include <assert.h>
 #define PADDING 4
 static void
 LABWC_src_ssd_resize_indicator_c_resize_indicator_reconfigure_view(struct resize_indicator *indicator)
@@ -12825,7 +12260,6 @@ resize_indicator_hide(struct view *view)
 	wlr_scene_node_set_enabled(&indicator->tree->node, false);
 }
 #undef PADDING
-#include <assert.h>
 void
 ssd_border_create(struct ssd *ssd)
 {
@@ -12933,7 +12367,6 @@ ssd_border_destroy(struct ssd *ssd)
 	wlr_scene_node_destroy(&ssd->border.tree->node);
 	ssd->border = (struct ssd_border_scene){0};
 }
-#include <assert.h>
 struct ssd_button *
 attach_ssd_button(struct wl_list *button_parts, enum lab_node_type type,
 		struct wlr_scene_tree *parent,
@@ -12973,7 +12406,6 @@ void ssd_button_free(struct ssd_button *button)
 	wl_list_remove(&button->link);
 	free(button);
 }
-#include <pixman.h>
 void
 ssd_extents_create(struct ssd *ssd)
 {
@@ -13083,8 +12515,6 @@ ssd_extents_destroy(struct ssd *ssd)
 	wlr_scene_node_destroy(&ssd->extents.tree->node);
 	ssd->extents = (struct ssd_extents_scene){0};
 }
-#include <assert.h>
-#include <string.h>
 static void LABWC_src_ssd_ssd_titlebar_c_set_squared_corners(struct ssd *ssd, bool enable);
 static void LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(struct ssd *ssd, enum lab_node_type type, bool enable);
 static void LABWC_src_ssd_ssd_titlebar_c_update_visible_buttons(struct ssd *ssd);
@@ -13156,9 +12586,6 @@ ssd_titlebar_create(struct ssd *ssd)
 		ssd->state.was_squared = true;
 	}
 	LABWC_src_ssd_ssd_titlebar_c_set_squared_corners(ssd, maximized || squared);
-	if (view->shaded) {
-		LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(ssd, LAB_NODE_BUTTON_SHADE, true);
-	}
 	if (view->visible_on_all_workspaces) {
 		LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(ssd, LAB_NODE_BUTTON_OMNIPRESENT, true);
 	}
@@ -13285,10 +12712,6 @@ ssd_titlebar_update(struct ssd *ssd)
 		ssd->state.was_maximized = maximized;
 		ssd->state.was_squared = squared;
 	}
-	if (ssd->state.was_shaded != view->shaded) {
-		LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(ssd, LAB_NODE_BUTTON_SHADE, view->shaded);
-		ssd->state.was_shaded = view->shaded;
-	}
 	if (ssd->state.was_omnipresent != view->visible_on_all_workspaces) {
 		LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(ssd, LAB_NODE_BUTTON_OMNIPRESENT,
 			view->visible_on_all_workspaces);
@@ -13358,8 +12781,6 @@ ssd_should_be_squared(struct ssd *ssd)
 			|| view->current.width < corner_width * 2)
 		&& view->maximized != VIEW_AXIS_BOTH;
 }
-#include <assert.h>
-#include <strings.h>
 struct border
 ssd_thickness(struct view *view)
 {
@@ -13501,7 +12922,6 @@ ssd_update_geometry(struct ssd *ssd)
 	bool maximized = view->maximized == VIEW_AXIS_BOTH;
 	bool squared = ssd_should_be_squared(ssd);
 	bool state_changed = ssd->state.was_maximized != maximized
-		|| ssd->state.was_shaded != view->shaded
 		|| ssd->state.was_squared != squared
 		|| ssd->state.was_omnipresent != view->visible_on_all_workspaces;
 	ssd_set_titlebar(ssd, view_titlebar_visible(view));
@@ -13578,16 +12998,6 @@ ssd_set_active(struct ssd *ssd, bool active)
 	}
 }
 void
-ssd_enable_shade(struct ssd *ssd, bool enable)
-{
-	if (!ssd) {
-		return;
-	}
-	ssd_titlebar_update(ssd);
-	ssd_border_update(ssd);
-	wlr_scene_node_set_enabled(&ssd->extents.tree->node, !enable);
-}
-void
 ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable)
 {
 	if (!ssd) {
@@ -13633,15 +13043,6 @@ handle_tearing_new_object(struct wl_listener *listener, void *data)
 	wl_signal_add(&tearing_control->events.destroy, &controller->destroy);
 }
 #endif
-#include <assert.h>
-#include <cairo.h>
-#include <drm_fourcc.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <strings.h>
 struct LABWC_src_theme_c_button {
 	const char *name;
 	const char *alt_name;
@@ -13777,16 +13178,6 @@ LABWC_src_theme_c_load_buttons(struct theme *theme)
 		.type = LAB_NODE_BUTTON_MAXIMIZE,
 		.state_set = LAB_BS_TOGGLED,
 	}, {
-		.name = "shade",
-		.fallback_button = (const char[]){ 0x3f, 0x3f, 0x00, 0x0c, 0x1e, 0x3f },
-		.type = LAB_NODE_BUTTON_SHADE,
-		.state_set = 0,
-	}, {
-		.name = "shade_toggled",
-		.fallback_button = (const char[]){ 0x3f, 0x3f, 0x00, 0x3f, 0x1e, 0x0c },
-		.type = LAB_NODE_BUTTON_SHADE,
-		.state_set = LAB_BS_TOGGLED,
-	}, {
 		.name = "desk",
 		.fallback_button = (const char[]){ 0x33, 0x33, 0x00, 0x00, 0x33, 0x33 },
 		.type = LAB_NODE_BUTTON_OMNIPRESENT,
@@ -13817,15 +13208,6 @@ LABWC_src_theme_c_load_buttons(struct theme *theme)
 		.name = "max_toggled_hover",
 		.alt_name = "max_hover_toggled",
 		.type = LAB_NODE_BUTTON_MAXIMIZE,
-		.state_set = LAB_BS_TOGGLED | LAB_BS_HOVERED,
-	}, {
-		.name = "shade_hover",
-		.type = LAB_NODE_BUTTON_SHADE,
-		.state_set = LAB_BS_HOVERED,
-	}, {
-		.name = "shade_toggled_hover",
-		.alt_name = "shade_hover_toggled",
-		.type = LAB_NODE_BUTTON_SHADE,
 		.state_set = LAB_BS_TOGGLED | LAB_BS_HOVERED,
 	}, {
 		.name = "desk_hover",
@@ -14168,13 +13550,6 @@ LABWC_src_theme_c_fill_background_colors(struct theme_background *bg)
 		LABWC_src_theme_c_copy_color_scaled(bg->color_to_split_to, bg->color_to, 1.0625f);
 	}
 }
-static void __attribute__((unused))
-LABWC_src_theme_c_fill_colors_with_osd_theme(struct theme *theme, float colors[3][4])
-{
-	memcpy(colors[0], theme->osd_bg_color, sizeof(colors[0]));
-	memcpy(colors[1], theme->osd_label_text_color, sizeof(colors[1]));
-	memcpy(colors[2], theme->osd_bg_color, sizeof(colors[2]));
-}
 static int
 LABWC_src_theme_c_get_titlebar_height(struct theme *theme)
 {
@@ -14185,24 +13560,6 @@ LABWC_src_theme_c_get_titlebar_height(struct theme *theme)
 	}
 	h += 2 * theme->window_titlebar_padding_height;
 	return h;
-}
-static void __attribute__((unused))
-LABWC_src_theme_c_blend_color_with_bg(float *dst, float *fg, float fg_a, float *bg)
-{
-	if (fg[3] <= 0.0f) {
-		memset(dst, 0, sizeof(float) * 4);
-		return;
-	}
-	float new_fg[4] = {
-		fg[0] / fg[3] * fg_a,
-		fg[1] / fg[3] * fg_a,
-		fg[2] / fg[3] * fg_a,
-		fg_a,
-	};
-	dst[0] = new_fg[0] + bg[0] * (1.0f - new_fg[3]);
-	dst[1] = new_fg[1] + bg[1] * (1.0f - new_fg[3]);
-	dst[2] = new_fg[2] + bg[2] * (1.0f - new_fg[3]);
-	dst[3] = new_fg[3] + bg[3] * (1.0f - new_fg[3]);
 }
 static void
 LABWC_src_theme_c_post_processing(struct theme *theme)
@@ -14311,16 +13668,6 @@ theme_finish(struct theme *theme)
 	}
 }
 #undef zero_array
-#include <errno.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <unistd.h>
 #define JTLABWC_CONTROL_SOCKET "jtlabwc-ctl.sock"
 #define JTLABWC_CONTROL_BACKLOG 8
 #define JTLABWC_CONTROL_LINE_MAX 512
@@ -14747,9 +14094,6 @@ view_impl_apply_geometry(struct view *view, int w, int h)
 	current->width = w;
 	current->height = h;
 }
-#include <assert.h>
-#include <strings.h>
-#include "wlr/util/log.h"
 #if HAVE_XWAYLAND
 #endif
 struct view *
@@ -14779,15 +14123,6 @@ LABWC_src_view_c_security_context_from_view(struct view *view)
 			server.security_context_manager_v1, client);
 	}
 	return NULL;
-}
-struct view_query *
-view_query_create(void)
-{
-	struct view_query *query = znew(*query);
-	query->window_type = LAB_WINDOW_TYPE_INVALID;
-	query->maximized = VIEW_AXIS_INVALID;
-	query->decoration = LAB_SSD_MODE_INVALID;
-	return query;
 }
 void
 view_query_free(struct view_query *query)
@@ -14856,9 +14191,6 @@ view_matches_query(struct view *view, struct view_query *query)
 		if (!LABWC_src_view_c_query_str_match(query->sandbox_app_id, ctx->app_id)) {
 			return false;
 		}
-	}
-	if (!LABWC_src_view_c_query_tristate_match(query->shaded, view->shaded)) {
-		return false;
 	}
 	if (query->maximized != VIEW_AXIS_INVALID && view->maximized != query->maximized) {
 		return false;
@@ -14983,19 +14315,6 @@ view_next(struct wl_list *head, struct view *view, enum lab_view_criteria criter
 	assert(head);
 	struct wl_list *elm = view ? &view->link : head;
 	for (elm = elm->next; elm != head; elm = elm->next) {
-		view = wl_container_of(elm, view, link);
-		if (view_matches_criteria(view, criteria)) {
-			return view;
-		}
-	}
-	return NULL;
-}
-struct view *
-view_prev(struct wl_list *head, struct view *view, enum lab_view_criteria criteria)
-{
-	assert(head);
-	struct wl_list *elm = view ? &view->link : head;
-	for (elm = elm->prev; elm != head; elm = elm->prev) {
 		view = wl_container_of(elm, view, link);
 		if (view_matches_criteria(view, criteria)) {
 			return view;
@@ -15207,7 +14526,6 @@ view_resize_relative(struct view *view, int left, int right, int top, int bottom
 	if (view->fullscreen || view->maximized != VIEW_AXIS_NONE) {
 		return;
 	}
-	view_set_shade(view, false);
 	struct wlr_box newgeo = view->pending;
 	newgeo.x -= left;
 	newgeo.width += left + right;
@@ -15341,9 +14659,6 @@ view_minimize(struct view *view, bool minimized)
 {
 	assert(view);
 	bool need_refocus = false;
-	if (false) {
-		return;
-	}
 	struct view *root = LABWC_src_view_c_view_get_root(view);
 	LABWC_src_view_c__minimize(root, minimized, &need_refocus);
 	LABWC_src_view_c_minimize_sub_views(root, minimized, &need_refocus);
@@ -15448,20 +14763,7 @@ int
 view_effective_height(struct view *view, bool use_pending)
 {
 	assert(view);
-	if (view->shaded) {
-		return 0;
-	}
 	return use_pending ? view->pending.height : view->current.height;
-}
-void
-view_center(struct view *view, const struct wlr_box *ref)
-{
-	assert(view);
-	int x, y;
-	if (view_compute_centered_position(view, ref, view->pending.width,
-			view->pending.height, &x, &y)) {
-		view_move(view, x, y);
-	}
 }
 static bool
 LABWC_src_view_c_view_compute_cascaded_position(struct view *view, struct wlr_box *geom)
@@ -15809,7 +15111,6 @@ view_maximize(struct view *view, enum view_axis axis)
 		return;
 	}
 	bool store_natural_geometry = !LABWC_src_view_c_in_interactive_move(view);
-	view_set_shade(view, false);
 	interactive_cancel(view);
 	if (store_natural_geometry) {
 		view_store_natural_geometry(view);
@@ -15960,7 +15261,7 @@ void
 view_set_ssd_mode(struct view *view, enum lab_ssd_mode mode)
 {
 	assert(view);
-	if (view->shaded || view->fullscreen
+	if (view->fullscreen
 			|| mode == view->ssd_mode) {
 		return;
 	}
@@ -15984,9 +15285,6 @@ view_toggle_fullscreen(struct view *view)
 static void
 LABWC_src_view_c_set_fullscreen(struct view *view, bool fullscreen)
 {
-	if (fullscreen) {
-		view_set_shade(view, false);
-	}
 	if (fullscreen && view->ssd_mode) {
 		LABWC_src_view_c_undecorate(view);
 	}
@@ -16186,7 +15484,6 @@ view_grow_to_edge(struct view *view, enum lab_edge direction)
 	if (!output_is_usable(view->output)) {
 		return;
 	}
-	view_set_shade(view, false);
 	struct wlr_box geo;
 	snap_grow_to_next_edge(view, direction, &geo);
 	view_move_resize(view, geo);
@@ -16201,7 +15498,6 @@ view_shrink_to_edge(struct view *view, enum lab_edge direction)
 	if (!output_is_usable(view->output)) {
 		return;
 	}
-	view_set_shade(view, false);
 	struct wlr_box geo = view->pending;
 	snap_shrink_to_next_edge(view, direction, &geo);
 	view_move_resize(view, geo);
@@ -16254,7 +15550,6 @@ view_snap_to_edge(struct view *view, enum lab_edge edge,
 		return;
 	}
 	bool store_natural_geometry = !LABWC_src_view_c_in_interactive_move(view);
-	view_set_shade(view, false);
 	if (lab_edge_is_cardinal(edge) && view->maximized == VIEW_AXIS_NONE
 			&& view->tiled != LAB_EDGE_CENTER) {
 		enum lab_edge invert_edge = lab_edge_invert(edge);
@@ -16298,7 +15593,6 @@ view_snap_to_region(struct view *view, struct region *region)
 		return;
 	}
 	bool store_natural_geometry = !LABWC_src_view_c_in_interactive_move(view);
-	view_set_shade(view, false);
 	if (view->maximized != VIEW_AXIS_NONE) {
 		view_maximize(view, VIEW_AXIS_NONE);
 	} else if (store_natural_geometry) {
@@ -16516,26 +15810,6 @@ view_update_visibility(struct view *view)
 	}
 }
 void
-view_set_shade(struct view *view, bool shaded)
-{
-	assert(view);
-	if (view->shaded == shaded) {
-		return;
-	}
-	if (shaded && (!view->ssd || !view_titlebar_visible(view))) {
-		return;
-	}
-	if (shaded && server.input_mode == LAB_INPUT_STATE_RESIZE) {
-		interactive_cancel(view);
-	}
-	view->shaded = shaded;
-	ssd_enable_shade(view->ssd, view->shaded);
-	if (view->content_tree) {
-		wlr_scene_node_set_enabled(&view->content_tree->node,
-			!view->shaded);
-	}
-}
-void
 view_init(struct view *view)
 {
 	assert(view);
@@ -16613,9 +15887,6 @@ view_destroy(struct view *view)
 	free(view);
 	cursor_update_focus();
 }
-#include <assert.h>
-#include <stdbool.h>
-#include <strings.h>
 static bool
 LABWC_src_window_rules_c_other_instances_exist(struct view *self, struct view_query *query)
 {
@@ -16697,11 +15968,6 @@ window_rules_get_property(struct view *view, const char *property)
 	}
 	return LAB_PROP_UNSPECIFIED;
 }
-#include <assert.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
 #define EXT_WORKSPACES_VERSION 1
 static size_t
 LABWC_src_workspaces_c_parse_workspace_index(const char *name)
@@ -16960,7 +16226,6 @@ workspaces_destroy(void)
 #define handle_request_configure LABWC_src_xwayland_unmanaged_c_handle_request_configure
 #define handle_set_geometry LABWC_src_xwayland_unmanaged_c_handle_set_geometry
 #define handle_set_override_redirect LABWC_src_xwayland_unmanaged_c_handle_set_override_redirect
-#include <assert.h>
 static void
 LABWC_src_xwayland_unmanaged_c_handle_grab_focus(struct wl_listener *listener, void *data)
 {
@@ -17168,8 +16433,6 @@ xwayland_unmanaged_create(struct wlr_xwayland_surface *xsurface, bool mapped)
 #define handle_set_strut_partial LABWC_src_xwayland_c_handle_set_strut_partial
 #define handle_set_title LABWC_src_xwayland_c_handle_set_title
 #define handle_set_window_type LABWC_src_xwayland_c_handle_set_window_type
-#include <assert.h>
-#include <stdlib.h>
 static void LABWC_src_xwayland_c_set_surface(struct view *view, struct wlr_surface *surface);
 static void LABWC_src_xwayland_c_handle_map(struct wl_listener *listener, void *data);
 static void LABWC_src_xwayland_c_handle_unmap(struct wl_listener *listener, void *data);
@@ -17648,7 +16911,6 @@ LABWC_src_xwayland_c_handle_map(struct wl_listener *listener, void *data)
 		die_if_null(view->content_tree);
 		wlr_scene_subsurface_tree_create(&view->capture.scene->tree, view->surface);
 	}
-	wlr_scene_node_set_enabled(&view->content_tree->node, !view->shaded);
 	if (!view->been_mapped) {
 		LABWC_src_xwayland_c_check_natural_geometry(view);
 		view_save_last_placement(view);
@@ -18156,7 +17418,6 @@ xdg_popup_create(struct view *view, struct wlr_xdg_popup *wlr_popup)
 #define handle_set_app_id LABWC_src_xdg_c_handle_set_app_id
 #define handle_set_parent LABWC_src_xdg_c_handle_set_parent
 #define handle_set_title LABWC_src_xdg_c_handle_set_title
-#include <assert.h>
 #define LAB_XDG_SHELL_VERSION 6
 #define CONFIGURE_TIMEOUT_MS 100
 static struct view *LABWC_src_xdg_c_xdg_toplevel_view_get_root(struct view *view);
@@ -18917,7 +18178,6 @@ xdg_shell_finish(void)
 #define handle_request_fullscreen LABWC_src_foreign_toplevel_wlr_foreign_c_handle_request_fullscreen
 #define handle_request_maximize LABWC_src_foreign_toplevel_wlr_foreign_c_handle_request_maximize
 #define handle_request_minimize LABWC_src_foreign_toplevel_wlr_foreign_c_handle_request_minimize
-#include <assert.h>
 static void
 LABWC_src_foreign_toplevel_wlr_foreign_c_handle_request_minimize(struct wl_listener *listener, void *data)
 {
@@ -19114,7 +18374,6 @@ wlr_foreign_toplevel_finish(struct wlr_foreign_toplevel *wlr_toplevel)
 #undef handle_request_fullscreen
 #undef handle_request_maximize
 #undef handle_request_minimize
-#include <assert.h>
 struct foreign_toplevel {
 	struct wlr_foreign_toplevel wlr_toplevel;
 	struct ext_foreign_toplevel ext_toplevel;
@@ -19145,7 +18404,6 @@ foreign_toplevel_destroy(struct foreign_toplevel *toplevel)
 }
 #define handle_new_app_id LABWC_src_foreign_toplevel_ext_foreign_c_handle_new_app_id
 #define handle_new_title LABWC_src_foreign_toplevel_ext_foreign_c_handle_new_title
-#include <assert.h>
 static void
 LABWC_src_foreign_toplevel_ext_foreign_c_handle_handle_destroy(struct wl_listener *listener, void *data)
 {
@@ -19280,24 +18538,6 @@ box_fit_within(int width, int height, struct wlr_box *bound)
 	box.y = bound->y + (bound->height - box.height) / 2;
 	return box;
 }
-struct wlr_fbox
-box_to_fbox(struct wlr_box *box)
-{
-	return (struct wlr_fbox){
-		.x = box->x,
-		.y = box->y,
-		.width = box->width,
-		.height = box->height,
-	};
-}
-#include <assert.h>
-#include <ctype.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-#include <unistd.h>
 static struct menuitem *LABWC_src_menu_menu_c_selected_item;
 static bool
 LABWC_src_menu_menu_c_is_unique_id(const char *id)
@@ -19823,8 +19063,6 @@ LABWC_src_menu_menu_c_init_windowmenu(void)
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleMaximize");
 	item = LABWC_src_menu_menu_c_item_create(menu, "Fullscreen", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleFullscreen");
-	item = LABWC_src_menu_menu_c_item_create(menu, "Roll Up/Down", false);
-	LABWC_src_menu_menu_c_item_add_action(item, "ToggleShade");
 	item = LABWC_src_menu_menu_c_item_create(menu, "Decorations", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleDecorations");
 	item = LABWC_src_menu_menu_c_item_create(menu, "Always on Top", false);
@@ -20046,9 +19284,6 @@ LABWC_src_menu_menu_c_menu_execute_item(struct menuitem *item)
 	seat_focus_override_end(&server.seat,   true);
 	if (!strcmp(item->parent->id, "client-list-combined-menu")
 			&& item->client_list_view) {
-		if (item->client_list_view->shaded) {
-			view_set_shade(item->client_list_view, false);
-		}
 		actions_run(item->client_list_view, &item->actions, NULL);
 	} else {
 		actions_run(item->parent->triggered_by_view, &item->actions, NULL);
@@ -20166,7 +19401,6 @@ menu_reconfigure(void)
 	server.menu_current = NULL;
 	menu_init();
 }
-#include <assert.h>
 static int
 LABWC_src_interactive_c_max_move_scale(double pos_cursor, double pos_old, double size_old,
 		double size_new)
@@ -20236,7 +19470,7 @@ interactive_begin(struct view *view, enum input_mode mode, enum lab_edge edges)
 		cursor_shape = LAB_CURSOR_GRAB;
 		break;
 	case LAB_INPUT_STATE_RESIZE: {
-		if (view->shaded || view->fullscreen) {
+		if (view->fullscreen) {
 			return;
 		}
 		if (edges != LAB_EDGE_NONE) {
@@ -20262,7 +19496,6 @@ interactive_begin(struct view *view, enum input_mode mode, enum lab_edge edges)
 			&& rc.unsnap_threshold <= 0) {
 		struct wlr_box natural_geo = view->natural_geometry;
 		interactive_anchor_to_cursor(&natural_geo);
-		view_set_shade(view, false);
 		view_set_maximized(view, VIEW_AXIS_NONE);
 		view_set_untiled(view);
 		view_move_resize(view, natural_geo);
@@ -20408,10 +19641,6 @@ interactive_cancel(struct view *view)
 	resize_indicator_hide(view);
 	seat_focus_override_end(&server.seat,   true);
 }
-#include <assert.h>
-#include <glib.h>
-#include <stdlib.h>
-#include <string.h>
 uint32_t
 parse_modifier(const char *symname)
 {
@@ -20430,20 +19659,6 @@ parse_modifier(const char *symname)
 	} else {
 		return 0;
 	}
-}
-bool
-keybind_the_same(struct keybind *a, struct keybind *b)
-{
-	assert(a && b);
-	if (a->modifiers != b->modifiers || a->keysyms_len != b->keysyms_len) {
-		return false;
-	}
-	for (size_t i = 0; i < a->keysyms_len; i++) {
-		if (a->keysyms[i] != b->keysyms[i]) {
-			return false;
-		}
-	}
-	return true;
 }
 bool
 keybind_contains_keycode(struct keybind *keybind, xkb_keycode_t keycode)
@@ -20579,8 +19794,6 @@ keybind_destroy(struct keybind *keybind)
 	zfree(keybind->keysyms);
 	zfree(keybind);
 }
-#include <string.h>
-#include <strings.h>
 static void
 LABWC_src_config_libinput_c_libinput_category_init(struct libinput_category *l)
 {
@@ -20604,38 +19817,6 @@ LABWC_src_config_libinput_c_libinput_category_init(struct libinput_category *l)
 	l->have_calibration_matrix = false;
 	l->scroll_factor = 1.0;
 }
-enum lab_libinput_device_type
-get_device_type(const char *s)
-{
-	if (string_null_or_empty(s)) {
-		return LAB_LIBINPUT_DEVICE_NONE;
-	}
-	if (!strcasecmp(s, "default")) {
-		return LAB_LIBINPUT_DEVICE_DEFAULT;
-	}
-	if (!strcasecmp(s, "touchpad")) {
-		return LAB_LIBINPUT_DEVICE_TOUCHPAD;
-	}
-	if (!strcasecmp(s, "non-touch")) {
-		return LAB_LIBINPUT_DEVICE_NON_TOUCH;
-	}
-	return LAB_LIBINPUT_DEVICE_NONE;
-}
-const char *
-libinput_device_type_name(enum lab_libinput_device_type type)
-{
-	switch (type) {
-	case LAB_LIBINPUT_DEVICE_NONE:
-		break;
-	case LAB_LIBINPUT_DEVICE_DEFAULT:
-		return "default";
-	case LAB_LIBINPUT_DEVICE_TOUCHPAD:
-		return "touchpad";
-	case LAB_LIBINPUT_DEVICE_NON_TOUCH:
-		return "non-touch";
-	}
-	return "(none)";
-}
 struct libinput_category *
 libinput_category_create(void)
 {
@@ -20655,9 +19836,6 @@ libinput_category_get_default(void)
 	}
 	return NULL;
 }
-#include <assert.h>
-#include <linux/input-event-codes.h>
-#include <strings.h>
 uint32_t
 mousebind_button_from_str(const char *str, uint32_t *modifiers)
 {
@@ -20741,16 +19919,6 @@ mousebind_event_from_str(const char *str)
 	}
 	return MOUSE_ACTION_NONE;
 }
-bool
-mousebind_the_same(struct mousebind *a, struct mousebind *b)
-{
-	assert(a && b);
-	return a->context == b->context
-		&& a->button == b->button
-		&& a->direction == b->direction
-		&& a->mouse_event == b->mouse_event
-		&& a->modifiers == b->modifiers;
-}
 struct mousebind *
 mousebind_create(const char *context)
 {
@@ -20765,12 +19933,6 @@ mousebind_create(const char *context)
 	wl_list_init(&m->actions);
 	return m;
 }
-#include <assert.h>
-#include <limits.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 uint32_t
 parse_privileged_interface(const char *name)
 {
@@ -21023,13 +20185,6 @@ rcxml_finish(void)
 	}
 	regions_destroy(NULL, &rc.regions);
 }
-#include <assert.h>
-#include <dirent.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
 #if WLR_HAS_DRM_BACKEND
 #else
 	#define wlr_backend_is_drm(backend) (false)
@@ -21245,7 +20400,6 @@ session_shutdown(void)
 }
 #undef LAB_ENV_VAR_MAX_SIZE
 #undef wlr_backend_is_drm
-#include <assert.h>
 static struct wl_list LABWC_src_decorations_kde_deco_c_decorations;
 static struct wlr_server_decoration_manager *LABWC_src_decorations_kde_deco_c_kde_deco_mgr;
 struct LABWC_src_decorations_kde_deco_c_kde_deco {

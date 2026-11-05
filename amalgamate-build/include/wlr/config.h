@@ -36,7 +36,7 @@
  *
  * Required for <wlr/render/vulkan.h>.
  */
-#define WLR_HAS_VULKAN_RENDERER 1
+#define WLR_HAS_VULKAN_RENDERER 0
 
 /**
  * Whether the GBM allocator is compile-time enabled. Equivalent to the
@@ -55,7 +55,7 @@
  *
  * Required for <wlr/xwayland/...>.
  */
-#define WLR_HAS_XWAYLAND 1
+#define WLR_HAS_XWAYLAND 0
 
 /**
  * Whether session support is compile-time enabled. Equivalent to the
