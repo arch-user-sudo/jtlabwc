@@ -202,7 +202,6 @@ void font_get_buffer_size(int max_width, const char *text, struct font *font,
 void font_buffer_create(struct lab_data_buffer **buffer, int max_width,
 	int height, const char *text, struct font *font, const float *color,
 	cairo_pattern_t *bg_pattern, double scale, bool use_markup);
-void font_finish(void);
 
 enum lab_edge {
 	LAB_EDGE_NONE = 0,
@@ -360,7 +359,6 @@ struct rcxml {
 };
 extern struct rcxml rc;
 void rcxml_init(void);
-void rcxml_finish(void);
 uint32_t parse_privileged_interface(const char *name);
 struct input {
 	struct wlr_input_device *wlr_input_device;
@@ -470,7 +468,6 @@ bool cursor_process_button_press(struct seat *seat, uint32_t button, uint32_t ti
 bool cursor_process_button_release(struct seat *seat, uint32_t button, uint32_t time_msec);
 bool cursor_finish_button_release(struct seat *seat, uint32_t button);
 void cursor_init(struct seat *seat);
-void cursor_reload(struct seat *seat);
 void cursor_emulate_axis(struct seat *seat,
 		struct wlr_input_device *device,
 		enum wl_pointer_axis orientation, double delta, double delta_discrete,
@@ -674,7 +671,6 @@ void desktop_update_top_layer_visibility(void);
 void desktop_focus_topmost_view(void);
 void seat_init(void);
 void seat_finish(void);
-void seat_reconfigure(void);
 void seat_force_focus_surface(struct seat *seat, struct wlr_surface *surface);
 void seat_focus_surface(struct seat *seat, struct wlr_surface *surface);
 void seat_focus_lock_surface(struct seat *seat, struct wlr_surface *surface);
@@ -753,13 +749,11 @@ void menu_submenu_enter(void);
 void menu_submenu_leave(void);
 bool menu_call_selected_actions(void);
 void menu_init(void);
-void menu_finish(void);
 void menu_on_view_destroy(struct view *view);
 struct menu *menu_get_by_id(const char *id);
 void menu_open(struct menu *menu, int x, int y);
 void menu_process_cursor_motion(struct wlr_scene_node *node);
 void menu_close(void);
-void menu_reconfigure(void);
 #define LAB_NR_LAYERS (4)
 struct output {
 	struct wl_list link;
@@ -817,7 +811,6 @@ struct region {
 	} center;
 };
 bool regions_should_snap(void);
-void regions_reconfigure(void);
 void regions_reconfigure_output(struct output *output);
 void regions_update_geometry(struct output *output);
 void regions_evacuate_output(struct output *output);
@@ -1714,7 +1707,6 @@ struct view;
 bool placement_find_best(struct view *view, struct wlr_box *geometry);
 struct server;
 struct view;
-void resize_indicator_reconfigure(void);
 void resize_indicator_show(struct view *view);
 void resize_indicator_update(struct view *view);
 void resize_indicator_hide(struct view *view);
@@ -5193,11 +5185,6 @@ font_buffer_create(struct lab_data_buffer **buffer, int max_width,
 	cairo_surface_flush(surf);
 	cairo_destroy(cairo);
 }
-void
-font_finish(void)
-{
-	pango_cairo_font_map_set_default(NULL);
-}
 bool
 lab_set_contains(struct lab_set *set, uint32_t value)
 {
@@ -7037,12 +7024,6 @@ LABWC_src_input_cursor_c_cursor_load(struct seat *seat)
 	} else {
 		LABWC_src_input_cursor_c_cursor_names = LABWC_src_input_cursor_c_cursors_x11;
 	}
-}
-void
-cursor_reload(struct seat *seat)
-{
-	LABWC_src_input_cursor_c_cursor_load(seat);
-	cursor_update_image(seat);
 }
 void
 cursor_init(struct seat *seat)
@@ -10217,15 +10198,6 @@ regions_reconfigure_output(struct output *output)
 	regions_update_geometry(output);
 }
 void
-regions_reconfigure(void)
-{
-	struct output *output;
-	wl_list_for_each(output, &server.outputs, link) {
-		regions_reconfigure_output(output);
-	}
-	desktop_arrange_all_views();
-}
-void
 regions_update_geometry(struct output *output)
 {
 	assert(output);
@@ -10839,38 +10811,6 @@ seat_finish(void)
 	input_handlers_finish(seat);
 	input_method_relay_finish(seat->input_method_relay);
 }
-static void
-LABWC_src_seat_c_configure_keyboard(struct seat *seat, struct input *input)
-{
-	struct wlr_input_device *device = input->wlr_input_device;
-	assert(device->type == WLR_INPUT_DEVICE_KEYBOARD);
-	struct keyboard *keyboard = (struct keyboard *)input;
-	struct wlr_keyboard *kb = wlr_keyboard_from_input_device(device);
-	keyboard_configure(seat, kb, keyboard->is_virtual);
-}
-void
-seat_reconfigure(void)
-{
-	struct seat *seat = &server.seat;
-	struct input *input;
-	cursor_reload(seat);
-	overlay_finish(seat);
-	keyboard_reset_current_keybind();
-	wl_list_for_each(input, &seat->inputs, link) {
-		switch (input->wlr_input_device->type) {
-		case WLR_INPUT_DEVICE_KEYBOARD:
-			LABWC_src_seat_c_configure_libinput(input->wlr_input_device);
-			LABWC_src_seat_c_configure_keyboard(seat, input);
-			break;
-		case WLR_INPUT_DEVICE_POINTER:
-			LABWC_src_seat_c_configure_libinput(input->wlr_input_device);
-			LABWC_src_seat_c_map_pointer_to_output(seat, input->wlr_input_device);
-			break;
-		default:
-			break;
-		}
-	}
-}
 void
 seat_force_focus_surface(struct seat *seat, struct wlr_surface *surface)
 {
@@ -11015,23 +10955,6 @@ seat_focus_override_end(struct seat *seat, bool restore_focus)
 #define LAB_WLR_COMPOSITOR_VERSION 6
 #define LAB_WLR_LINUX_DMABUF_VERSION 4
 #define LAB_WLR_PRESENTATION_TIME_VERSION 2
-static void
-LABWC_src_server_c_reload_config_and_theme(void)
-{
-	desktop_cancel_pending_auto_raise();
-	scaled_buffer_invalidate_sharing();
-	theme_finish(rc.theme);
-	theme_init(rc.theme);
-	struct view *view;
-	wl_list_for_each(view, &server.views, link) {
-		view_reload_ssd(view);
-	}
-	menu_reconfigure();
-	seat_reconfigure();
-	regions_reconfigure();
-	resize_indicator_reconfigure();
-	kde_server_decoration_update_default();
-}
 static int
 LABWC_src_server_c_handle_sigterm(int signal, void *data)
 {
@@ -11189,7 +11112,11 @@ LABWC_src_server_c_handle_renderer_lost(struct wl_listener *listener, void *data
 		wlr_output_init_render(output->wlr_output,
 			server.allocator, server.renderer);
 	}
-	LABWC_src_server_c_reload_config_and_theme();
+	scaled_buffer_invalidate_sharing();
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		view_reload_ssd(view);
+	}
 	wlr_allocator_destroy(old_allocator);
 	wlr_renderer_destroy(old_renderer);
 }
@@ -12155,29 +12082,6 @@ LABWC_src_ssd_resize_indicator_c_wants_indicator(struct view *view)
 		}
 	}
 	return rc.resize_indicator == LAB_RESIZE_INDICATOR_ALWAYS;
-}
-void
-resize_indicator_reconfigure(void)
-{
-	struct view *view;
-	wl_list_for_each(view, &server.views, link) {
-		struct resize_indicator *indicator = &view->resize_indicator;
-		if (indicator->tree) {
-			LABWC_src_ssd_resize_indicator_c_resize_indicator_reconfigure_view(indicator);
-		}
-		if (view != server.grabbed_view) {
-			continue;
-		}
-		if (indicator->tree && indicator->tree->node.enabled) {
-			if (LABWC_src_ssd_resize_indicator_c_wants_indicator(view)) {
-				resize_indicator_update(view);
-			} else {
-				resize_indicator_hide(view);
-			}
-		} else if (LABWC_src_ssd_resize_indicator_c_wants_indicator(view)) {
-			resize_indicator_show(view);
-		}
-	}
 }
 static void
 LABWC_src_ssd_resize_indicator_c_resize_indicator_set_size(struct resize_indicator *indicator, int width)
@@ -17293,6 +17197,8 @@ xwayland_flush(void)
 #undef handle_set_title
 #undef handle_set_window_type
 #endif
+
+
 #define handle_commit LABWC_src_xdg_popup_c_handle_commit
 #define handle_destroy LABWC_src_xdg_popup_c_handle_destroy
 #define handle_new_popup LABWC_src_xdg_popup_c_handle_new_popup
@@ -19084,52 +18990,6 @@ menu_init(void)
 	LABWC_src_menu_menu_c_init_windowmenu();
 	LABWC_src_menu_menu_c_validate();
 }
-static void
-LABWC_src_menu_menu_c_nullify_item_pointing_to_this_menu(struct menu *menu)
-{
-	struct menu *iter;
-	wl_list_for_each(iter, &server.menus, link) {
-		struct menuitem *item;
-		wl_list_for_each(item, &iter->menuitems, link) {
-			if (item->submenu == menu) {
-				item->submenu = NULL;
-			}
-		}
-		if (iter->parent == menu) {
-			iter->parent = NULL;
-		}
-		if (iter->selection.menu == menu) {
-			iter->selection.menu = NULL;
-		}
-	}
-}
-static void
-LABWC_src_menu_menu_c_menu_free(struct menu *menu)
-{
-	LABWC_src_menu_menu_c_nullify_item_pointing_to_this_menu(menu);
-	if (server.menu_current == menu) {
-		menu_close();
-	}
-	struct menuitem *item, *next;
-	wl_list_for_each_safe(item, next, &menu->menuitems, link) {
-		LABWC_src_menu_menu_c_item_destroy(item);
-	}
-	if (menu->scene_tree) {
-		wlr_scene_node_destroy(&menu->scene_tree->node);
-	}
-	wl_list_remove(&menu->link);
-	zfree(menu->id);
-	zfree(menu->label);
-	zfree(menu);
-}
-void
-menu_finish(void)
-{
-	struct menu *menu, *tmp_menu;
-	wl_list_for_each_safe(menu, tmp_menu, &server.menus, link) {
-		LABWC_src_menu_menu_c_menu_free(menu);
-	}
-}
 void
 menu_on_view_destroy(struct view *view)
 {
@@ -19393,13 +19253,6 @@ menu_close(void)
 	LABWC_src_menu_menu_c_menu_close(server.menu_current);
 	server.menu_current = NULL;
 	seat_focus_override_end(&server.seat,   true);
-}
-void
-menu_reconfigure(void)
-{
-	menu_finish();
-	server.menu_current = NULL;
-	menu_init();
 }
 static int
 LABWC_src_interactive_c_max_move_scale(double pos_cursor, double pos_old, double size_old,
@@ -19988,49 +19841,34 @@ LABWC_src_config_rcxml_c_fill_default_title_layout(void)
 static void
 LABWC_src_config_rcxml_c_init_defaults(void)
 {
-	static bool has_run;
-	if (!has_run) {
-		wl_list_init(&rc.usable_area_overrides);
-		wl_list_init(&rc.keybinds);
-		wl_list_init(&rc.mousebinds);
-		wl_list_init(&rc.libinput_categories);
-		wl_list_init(&rc.workspace_config.workspaces);
-		wl_list_init(&rc.regions);
-		wl_list_init(&rc.window_rules);
-		}
-	has_run = true;
+	wl_list_init(&rc.usable_area_overrides);
+	wl_list_init(&rc.keybinds);
+	wl_list_init(&rc.mousebinds);
+	wl_list_init(&rc.libinput_categories);
+	wl_list_init(&rc.workspace_config.workspaces);
+	wl_list_init(&rc.regions);
+	wl_list_init(&rc.window_rules);
 	rc.placement_policy = LAB_PLACE_CASCADE;
-	rc.placement_cascade_offset_x = 0;
-	rc.placement_cascade_offset_y = 0;
 	rc.xdg_shell_server_side_deco = true;
-	rc.hide_maximized_window_titlebar = false;
 	rc.ssd_keep_border = true;
 	rc.corner_radius = 8;
-	rc.gap = 0;
 #ifdef FULLSCREEN_TEARING
 	rc.allow_tearing = LAB_TEARING_FULLSCREEN_FORCED;
 #else
 	rc.allow_tearing = LAB_TEARING_DISABLED;
 #endif
 	rc.auto_enable_outputs = true;
-	rc.reuse_output_mode = false;
 	rc.allowed_interfaces = UINT32_MAX;
-	rc.xwayland_persistence = false;
 	rc.primary_selection = true;
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_activewindow);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_inactivewindow);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_menuheader);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_menuitem);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_osd);
-	rc.focus_follow_mouse = false;
 	rc.focus_follow_mouse_requires_movement = true;
-	rc.raise_on_focus = false;
-	rc.raise_on_focus_delay_ms = 0;
 	rc.doubleclick_time = 200;
 	rc.repeat_rate = 45;
 	rc.repeat_delay = 250;
-	rc.kb_numlock_enable = LAB_STATE_UNSPECIFIED;
-	rc.kb_layout_per_window = false;
 	rc.screen_edge_strength = 20;
 	rc.window_edge_strength = 20;
 	rc.unsnap_threshold = 20;
@@ -20043,7 +19881,6 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.snap_overlay_delay_outer = 500;
 	rc.snap_top_maximize = true;
 	rc.snap_tiling_events_mode = LAB_TILING_EVENTS_ALWAYS;
-	rc.resize_indicator = LAB_RESIZE_INDICATOR_NEVER;
 	rc.resize_draw_contents = true;
 	rc.resize_corner_range = -1;
 	rc.resize_minimum_area = 8;
@@ -20141,49 +19978,6 @@ rcxml_init(void)
 {
 	LABWC_src_config_rcxml_c_init_defaults();
 	LABWC_src_config_rcxml_c_post_processing();
-}
-void
-rcxml_finish(void)
-{
-	zfree(rc.font_activewindow.name);
-	zfree(rc.font_inactivewindow.name);
-	zfree(rc.font_menuheader.name);
-	zfree(rc.font_menuitem.name);
-	zfree(rc.font_osd.name);
-	zfree(rc.workspace_config.initial_workspace_name);
-	rc.nr_title_buttons_left = 0;
-	rc.nr_title_buttons_right = 0;
-	struct usable_area_override *area, *area_tmp;
-	wl_list_for_each_safe(area, area_tmp, &rc.usable_area_overrides, link) {
-		wl_list_remove(&area->link);
-		zfree(area->output);
-		zfree(area);
-	}
-	struct keybind *k, *k_tmp;
-	wl_list_for_each_safe(k, k_tmp, &rc.keybinds, link) {
-		wl_list_remove(&k->link);
-		action_list_free(&k->actions);
-		keybind_destroy(k);
-	}
-	struct mousebind *m, *m_tmp;
-	wl_list_for_each_safe(m, m_tmp, &rc.mousebinds, link) {
-		wl_list_remove(&m->link);
-		action_list_free(&m->actions);
-		zfree(m);
-	}
-	struct libinput_category *l, *l_tmp;
-	wl_list_for_each_safe(l, l_tmp, &rc.libinput_categories, link) {
-		wl_list_remove(&l->link);
-		zfree(l->name);
-		zfree(l);
-	}
-	struct workspace_config *w, *w_tmp;
-	wl_list_for_each_safe(w, w_tmp, &rc.workspace_config.workspaces, link) {
-		wl_list_remove(&w->link);
-		zfree(w->name);
-		zfree(w);
-	}
-	regions_destroy(NULL, &rc.regions);
 }
 #if WLR_HAS_DRM_BACKEND
 #else
@@ -20686,10 +20480,6 @@ main(int argc, char *argv[])
 	wl_display_run(server.wl_display);
 	session_shutdown();
 	jtlabwc_control_finish();
-	menu_finish();
-	theme_finish(&theme);
-	rcxml_finish();
-	font_finish();
 	server_finish();
 	return 0;
 }
