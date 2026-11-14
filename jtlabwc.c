@@ -20164,8 +20164,8 @@ session_environment_init(void)
 }
 static const char * const LABWC_src_config_session_c_autostart_commands[] = {
 	"jtlab",
-	"gentoo-pipewire-launcher",
-	"foot --server",
+	"jtstartup",
+	"jtwpi",
 	NULL,
 };
 static const char * const LABWC_src_config_session_c_shutdown_commands[] = {
