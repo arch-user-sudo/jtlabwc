@@ -18773,6 +18773,11 @@ struct wlr_layer_surface_v1 {
 	bool configured;
 	struct wl_list configure_list;
 
+	// Properties sent to the client in the last configure event
+	struct {
+		uint32_t width, height;
+	} scheduled;
+
 	struct wlr_layer_surface_v1_state current, pending;
 
 	// Whether the surface is ready to receive configure events
@@ -61184,7 +61189,8 @@ static bool WLR_backend_drm_libliftoff_c_add_connector(drmModeAtomicReq *req,
 	return ok;
 }
 
-static void WLR_backend_drm_libliftoff_c_connector_update_layers_feedback(const struct wlr_drm_connector_state *state) {
+static void WLR_backend_drm_libliftoff_c_connector_update_layers_feedback(const struct wlr_drm_connector_state *state,
+		bool test_only) {
 	struct wlr_drm_backend *drm = state->connector->backend;
 
 	if (!(state->base->committed & WLR_OUTPUT_STATE_LAYERS)) {
@@ -61196,7 +61202,9 @@ static void WLR_backend_drm_libliftoff_c_connector_update_layers_feedback(const 
 		struct wlr_drm_layer *layer = get_drm_layer(drm, layer_state->layer);
 		layer_state->accepted =
 			!liftoff_layer_needs_composition(layer->liftoff);
-		if (!layer_state->accepted) {
+		// Only send feedback for real commits, test commits may try out
+		// configurations which will never be committed
+		if (!layer_state->accepted && !test_only) {
 			WLR_backend_drm_libliftoff_c_update_layer_feedback(drm, layer);
 		}
 	}
@@ -61276,9 +61284,13 @@ out:
 		struct wlr_drm_connector_state *conn_state = &state->connectors[i];
 		if (ok && !test_only) {
 			drm_atomic_connector_apply_commit(conn_state);
-			WLR_backend_drm_libliftoff_c_connector_update_layers_feedback(conn_state);
 		} else {
 			drm_atomic_connector_rollback_commit(conn_state);
+		}
+		// Test commits need the accepted flags too: that's how compositors
+		// find out which layers can be scanned out.
+		if (ok) {
+			WLR_backend_drm_libliftoff_c_connector_update_layers_feedback(conn_state, test_only);
 		}
 	}
 
@@ -97888,6 +97900,8 @@ uint32_t wlr_layer_surface_v1_configure(struct wlr_layer_surface_v1 *surface,
 	zwlr_layer_surface_v1_send_configure(surface->resource,
 			configure->serial, configure->width,
 			configure->height);
+	surface->scheduled.width = width;
+	surface->scheduled.height = height;
 	return configure->serial;
 }
 

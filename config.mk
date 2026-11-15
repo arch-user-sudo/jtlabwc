@@ -2,7 +2,7 @@ CFLAGS = -O2 -march=native -mtune=native -pipe \
          -fno-plt -fomit-frame-pointer \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
          -ffunction-sections -fdata-sections -flto -DWLR_USE_UNSTABLE \
-         -g0
+         -g0 -s
 
 # Uncomment to build XWayland support
 #XWAYLAND = -DXWAYLAND
