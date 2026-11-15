@@ -5,6 +5,7 @@
  *   jtlabwcctl snap '#RRGGBB'     window snapping overlay
  *   jtlabwcctl accent '#RRGGBB'   both of the above
  *   jtlabwcctl '#RRGGBB'          shorthand for accent
+ *   jtlabwcctl reload             re-read ~/.config/jt/input.conf
  *   jtlabwcctl reset              return to the theme colors
  *
  * An optional #RRGGBBAA value overrides the alpha channel.  Without it, the
@@ -68,12 +69,13 @@ static void
 usage(const char *prog)
 {
 	fprintf(stderr,
-		"usage: %s close COLOR | snap COLOR | accent COLOR | reset\n"
+		"usage: %s close COLOR | snap COLOR | accent COLOR | reload | reset\n"
 		"       %s COLOR\n"
 		"  close COLOR    change the SSD close-button color\n"
 		"  snap COLOR     change the window snapping overlay color\n"
 		"  accent COLOR   change both colors\n"
 		"  COLOR          shorthand for accent\n"
+		"  reload         re-read ~/.config/jt/input.conf\n"
 		"  reset          return to the theme colors\n"
 		"COLOR is #RRGGBB, RRGGBB, or #RRGGBBAA\n",
 		prog, prog);
@@ -93,7 +95,13 @@ main(int argc, char *argv[])
 		return 0;
 	}
 
-	if (!strcmp(argv[1], "reset")) {
+	if (!strcmp(argv[1], "reload")) {
+		if (argc != 2) {
+			usage(argv[0]);
+			return 1;
+		}
+		snprintf(msg, sizeof(msg), "reload\n");
+	} else if (!strcmp(argv[1], "reset")) {
 		if (argc != 2) {
 			usage(argv[0]);
 			return 1;

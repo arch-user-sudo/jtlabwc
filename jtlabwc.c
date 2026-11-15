@@ -13702,6 +13702,288 @@ jtlabwc_control_refresh(void)
 		overlay_update(&server.seat);
 	}
 }
+#define JTLABWC_KEYBINDS_CONFIG "keybinds.conf"
+#define JTLABWC_TERMINAL_DEFAULT "footclient"
+#define JTLABWC_TERMINAL_MAX 256
+
+static char jtlabwc_terminal[JTLABWC_TERMINAL_MAX] = JTLABWC_TERMINAL_DEFAULT;
+
+/* Read ~/.config/jt/keybinds.conf.  Only the default terminal command is
+ * configurable for now; every other binding stays compiled in.  This must run
+ * before rcxml_init() so the default keybind table picks up the command. */
+static void
+jtlabwc_keybinds_config_load(void)
+{
+	snprintf(jtlabwc_terminal, sizeof(jtlabwc_terminal), "%s",
+		JTLABWC_TERMINAL_DEFAULT);
+
+	const char *home = getenv("HOME");
+	if (!home || !*home) {
+		return;
+	}
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/.config/jt/%s", home,
+		JTLABWC_KEYBINDS_CONFIG);
+
+	FILE *file = fopen(path, "r");
+	if (!file) {
+		return;
+	}
+
+	char line[256];
+	while (fgets(line, sizeof(line), file)) {
+		char *key = line;
+		while (*key == ' ' || *key == '\t') {
+			key++;
+		}
+		if (!*key || *key == '#' || *key == '\n' || *key == '\r') {
+			continue;
+		}
+		char *equals = strchr(key, '=');
+		if (!equals) {
+			continue;
+		}
+		*equals = '\0';
+		char *value = equals + 1;
+
+		char *key_end = key + strlen(key);
+		while (key_end > key && (key_end[-1] == ' ' ||
+				key_end[-1] == '\t')) {
+			*--key_end = '\0';
+		}
+		while (*value == ' ' || *value == '\t') {
+			value++;
+		}
+		char *value_end = value + strlen(value);
+		while (value_end > value && (value_end[-1] == '\n' ||
+				value_end[-1] == '\r' || value_end[-1] == ' ' ||
+				value_end[-1] == '\t')) {
+			*--value_end = '\0';
+		}
+		if (!*value) {
+			continue;
+		}
+
+		if (!strcmp(key, "terminal")) {
+			snprintf(jtlabwc_terminal, sizeof(jtlabwc_terminal),
+				"%s", value);
+		}
+	}
+	fclose(file);
+
+	/* Point the compiled-in default binding at the configured command. */
+	for (size_t i = 0; key_combos[i].binding; i++) {
+		if (!strcmp(key_combos[i].binding, "W-Return") &&
+				!strcmp(key_combos[i].action, "Execute")) {
+			key_combos[i].attributes[0].value = jtlabwc_terminal;
+			break;
+		}
+	}
+}
+
+/* Update the live W-Return binding after a reload.  rcxml_init() has already
+ * copied the command into an action argument, so change that copy in place. */
+static void
+jtlabwc_keybinds_config_apply(void)
+{
+	struct keybind *keybind;
+	wl_list_for_each(keybind, &rc.keybinds, link) {
+		if (keybind->modifiers != WLR_MODIFIER_LOGO ||
+				keybind->keysyms_len != 1 ||
+				keybind->keysyms[0] != XKB_KEY_Return) {
+			continue;
+		}
+		struct action *action;
+		wl_list_for_each(action, &keybind->actions, link) {
+			if (action->type != ACTION_TYPE_EXECUTE) {
+				continue;
+			}
+			struct action_arg *arg;
+			wl_list_for_each(arg, &action->args, link) {
+				if (arg->type != LAB_ACTION_ARG_STR ||
+						strcasecmp(arg->key, "command")) {
+					continue;
+				}
+				struct LABWC_src_action_c_action_arg_str *str =
+					(struct LABWC_src_action_c_action_arg_str *)arg;
+				free(str->value);
+				str->value = xstrdup(jtlabwc_terminal);
+				return;
+			}
+		}
+	}
+}
+
+#define JTLABWC_INPUT_CONFIG "input.conf"
+
+static bool
+jtlabwc_input_enabled(const char *value)
+{
+	return !strcmp(value, "1") || !strcmp(value, "on") ||
+		!strcmp(value, "true") || !strcmp(value, "yes");
+}
+
+/* Read ~/.config/jt/input.conf into the default libinput category and the
+ * keyboard repeat settings.  The file is written by jtsettings.  Unknown keys
+ * are ignored so the format can grow without breaking an older compositor. */
+static void
+jtlabwc_input_config_load(void)
+{
+	struct libinput_category *category = libinput_category_get_default();
+	const char *home = getenv("HOME");
+	if (!category || !home || !*home) {
+		return;
+	}
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/.config/jt/%s", home,
+		JTLABWC_INPUT_CONFIG);
+
+	FILE *file = fopen(path, "r");
+	if (!file) {
+		return;
+	}
+
+	char line[256];
+	while (fgets(line, sizeof(line), file)) {
+		char *key = line;
+		while (*key == ' ' || *key == '\t') {
+			key++;
+		}
+		if (!*key || *key == '#' || *key == '\n' || *key == '\r') {
+			continue;
+		}
+		char *equals = strchr(key, '=');
+		if (!equals) {
+			continue;
+		}
+		*equals = '\0';
+		char *value = equals + 1;
+
+		char *key_end = key + strlen(key);
+		while (key_end > key && (key_end[-1] == ' ' ||
+				key_end[-1] == '\t')) {
+			*--key_end = '\0';
+		}
+		while (*value == ' ' || *value == '\t') {
+			value++;
+		}
+		char *value_end = value + strlen(value);
+		while (value_end > value && (value_end[-1] == '\n' ||
+				value_end[-1] == '\r' || value_end[-1] == ' ' ||
+				value_end[-1] == '\t')) {
+			*--value_end = '\0';
+		}
+		if (!*value) {
+			continue;
+		}
+
+		if (!strcmp(key, "pointer_speed")) {
+			double speed = strtod(value, NULL);
+			if (speed < -1.0) {
+				speed = -1.0;
+			} else if (speed > 1.0) {
+				speed = 1.0;
+			}
+			category->pointer_speed = (float)speed;
+		} else if (!strcmp(key, "natural_scroll")) {
+			category->natural_scroll = jtlabwc_input_enabled(value);
+		} else if (!strcmp(key, "tap")) {
+			category->tap = jtlabwc_input_enabled(value)
+				? LIBINPUT_CONFIG_TAP_ENABLED
+				: LIBINPUT_CONFIG_TAP_DISABLED;
+		} else if (!strcmp(key, "tap_and_drag")) {
+			category->tap_and_drag = jtlabwc_input_enabled(value);
+		} else if (!strcmp(key, "disable_while_typing")) {
+			category->dwt = jtlabwc_input_enabled(value);
+		} else if (!strcmp(key, "left_handed")) {
+			category->left_handed = jtlabwc_input_enabled(value);
+		} else if (!strcmp(key, "middle_emulation")) {
+			category->middle_emu = jtlabwc_input_enabled(value);
+		} else if (!strcmp(key, "scroll_method")) {
+			if (!strcmp(value, "two_finger")) {
+				category->scroll_method =
+					LIBINPUT_CONFIG_SCROLL_2FG;
+			} else if (!strcmp(value, "edge")) {
+				category->scroll_method =
+					LIBINPUT_CONFIG_SCROLL_EDGE;
+			} else if (!strcmp(value, "button")) {
+				category->scroll_method =
+					LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN;
+			}
+		} else if (!strcmp(key, "accel_profile")) {
+			if (!strcmp(value, "flat")) {
+				category->accel_profile =
+					LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT;
+			} else if (!strcmp(value, "adaptive")) {
+				category->accel_profile =
+					LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+			}
+		} else if (!strcmp(key, "repeat_rate")) {
+			int rate = atoi(value);
+			if (rate < 0) {
+				rate = 0;
+			} else if (rate > 200) {
+				rate = 200;
+			}
+			rc.repeat_rate = rate;
+		} else if (!strcmp(key, "repeat_delay")) {
+			int delay = atoi(value);
+			if (delay < 0) {
+				delay = 0;
+			} else if (delay > 2000) {
+				delay = 2000;
+			}
+			rc.repeat_delay = delay;
+		}
+	}
+	fclose(file);
+}
+
+/* Re-apply the default category to every input device already connected. */
+static void
+jtlabwc_input_config_apply(void)
+{
+	struct input *input;
+	wl_list_for_each(input, &server.seat.inputs, link) {
+		LABWC_src_seat_c_configure_libinput(input->wlr_input_device);
+	}
+}
+
+/* Push the repeat settings to the seat keyboard and any standalone (virtual)
+ * keyboards already connected. */
+static void
+jtlabwc_keyboard_config_apply(void)
+{
+	if (server.seat.keyboard_group) {
+		wlr_keyboard_set_repeat_info(&server.seat.keyboard_group->keyboard,
+			rc.repeat_rate, rc.repeat_delay);
+	}
+	struct input *input;
+	wl_list_for_each(input, &server.seat.inputs, link) {
+		if (input->wlr_input_device->type != WLR_INPUT_DEVICE_KEYBOARD) {
+			continue;
+		}
+		struct wlr_keyboard *kb =
+			wlr_keyboard_from_input_device(input->wlr_input_device);
+		if (kb) {
+			wlr_keyboard_set_repeat_info(kb, rc.repeat_rate,
+				rc.repeat_delay);
+		}
+	}
+}
+
+static void
+jtlabwc_config_reload(void)
+{
+	jtlabwc_input_config_load();
+	jtlabwc_input_config_apply();
+	jtlabwc_keyboard_config_apply();
+	jtlabwc_keybinds_config_load();
+	jtlabwc_keybinds_config_apply();
+}
+
 static void
 jtlabwc_control_process_line(char *line)
 {
@@ -13734,6 +14016,9 @@ jtlabwc_control_process_line(char *line)
 		set_close = true;
 	} else if (!strcmp(command, "snap")) {
 		set_snap = true;
+	} else if (!strcmp(command, "reload")) {
+		jtlabwc_config_reload();
+		return;
 	} else if (!strcmp(command, "reset")) {
 		jtlabwc_close_color = (struct jtlabwc_control_color){0};
 		jtlabwc_snap_color = (struct jtlabwc_control_color){0};
@@ -20449,7 +20734,9 @@ main(int argc, char *argv[])
 	LABWC_src_main_c_die_on_detecting_suid();
 	LABWC_src_main_c_die_on_no_fonts();
 	session_environment_init();
+	jtlabwc_keybinds_config_load();
 	rcxml_init();
+	jtlabwc_input_config_load();
 	char pid[32];
 	snprintf(pid, sizeof(pid), "%d", getpid());
 	if (setenv("LABWC_PID", pid, true) < 0) {
