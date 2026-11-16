@@ -819,11 +819,6 @@ struct region *regions_from_cursor(void);
 struct region *regions_from_name(const char *region_name, struct output *output);
 void show_desktop_toggle(void);
 void show_desktop_reset(void);
-enum ssd_active_state {
-	SSD_INACTIVE = 0,
-	SSD_ACTIVE = 1,
-};
-#define FOR_EACH_ACTIVE_STATE(active) for (active = SSD_INACTIVE; active <= SSD_ACTIVE; active++)
 struct wlr_cursor;
 struct server;
 struct ssd;
@@ -886,7 +881,6 @@ struct theme {
 	int window_titlebar_padding_height;
 	int titlebar_height;
 	float window_toggled_keybinds_color[4];
-	enum lab_justification window_label_text_justify;
 	int window_button_width;
 	int window_button_height;
 	int window_button_spacing;
@@ -903,7 +897,7 @@ struct theme {
 		struct lab_data_buffer *titlebar_fill;
 		struct lab_data_buffer *corner_top_left_normal;
 		struct lab_data_buffer *corner_top_right_normal;
-	} window[2];
+	} window;
 	int menu_item_height;
 	int menu_header_height;
 	int menu_overlap_x;
@@ -1788,6 +1782,8 @@ struct ssd {
 		bool was_squared;
 		struct wlr_box geometry;
 	} state;
+	bool active;
+	bool inhibits_keybinds;
 	struct ssd_extents_scene {
 		struct wlr_scene_tree *tree;
 		struct wlr_scene_rect *top, *bottom, *left, *right;
@@ -1795,21 +1791,19 @@ struct ssd {
 	struct ssd_titlebar_scene {
 		int height;
 		struct wlr_scene_tree *tree;
-		struct ssd_titlebar_subtree {
-			struct wlr_scene_tree *tree;
-			struct wlr_scene_buffer *corner_left;
-			struct wlr_scene_buffer *corner_right;
-			struct wlr_scene_buffer *bar;
-			struct wl_list buttons_left;
-			struct wl_list buttons_right;
-		} subtrees[2];
+		/* One titlebar for both focus states: active and inactive
+		 * share the same background, corners and buttons. */
+		struct wlr_scene_buffer *bar;
+		struct wlr_scene_buffer *corner_left;
+		struct wlr_scene_buffer *corner_right;
+		/* The accent stripe is shown only while the window is focused. */
+		struct wlr_scene_rect *accent_line;
+		struct wl_list buttons_left;
+		struct wl_list buttons_right;
 	} titlebar;
 	struct ssd_border_scene {
 		struct wlr_scene_tree *tree;
-		struct ssd_border_subtree {
-			struct wlr_scene_tree *tree;
-			struct wlr_scene_rect *top, *bottom, *left, *right;
-		} subtrees[2];
+		struct wlr_scene_rect *top, *bottom, *left, *right;
 	} border;
 	struct border margin;
 };
@@ -12177,30 +12171,24 @@ ssd_border_create(struct ssd *ssd)
 	int corner_width = ssd_get_corner_width();
 	ssd->border.tree = lab_wlr_scene_tree_create(ssd->tree);
 	wlr_scene_node_set_position(&ssd->border.tree->node, -theme->border_width, 0);
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_border_subtree *subtree = &ssd->border.subtrees[active];
-		subtree->tree = lab_wlr_scene_tree_create(ssd->border.tree);
-		struct wlr_scene_tree *parent = subtree->tree;
-		wlr_scene_node_set_enabled(&parent->node, active);
-		float *color = theme->window[active].border_color;
-		subtree->left = lab_wlr_scene_rect_create(parent,
-			theme->border_width, height, color);
-		wlr_scene_node_set_position(&subtree->left->node, 0, 0);
-		subtree->right = lab_wlr_scene_rect_create(parent,
-			theme->border_width, height, color);
-		wlr_scene_node_set_position(&subtree->right->node,
-			theme->border_width + width, 0);
-		subtree->bottom = lab_wlr_scene_rect_create(parent,
-			full_width, theme->border_width, color);
-		wlr_scene_node_set_position(&subtree->bottom->node,
-			0, height);
-		subtree->top = lab_wlr_scene_rect_create(parent,
-			MAX(width - 2 * corner_width, 0), theme->border_width, color);
-		wlr_scene_node_set_position(&subtree->top->node,
-			theme->border_width + corner_width,
-			-(ssd->titlebar.height + theme->border_width));
-	}
+	struct wlr_scene_tree *parent = ssd->border.tree;
+	float *color = theme->window.border_color;
+	ssd->border.left = lab_wlr_scene_rect_create(parent,
+		theme->border_width, height, color);
+	wlr_scene_node_set_position(&ssd->border.left->node, 0, 0);
+	ssd->border.right = lab_wlr_scene_rect_create(parent,
+		theme->border_width, height, color);
+	wlr_scene_node_set_position(&ssd->border.right->node,
+		theme->border_width + width, 0);
+	ssd->border.bottom = lab_wlr_scene_rect_create(parent,
+		full_width, theme->border_width, color);
+	wlr_scene_node_set_position(&ssd->border.bottom->node,
+		0, height);
+	ssd->border.top = lab_wlr_scene_rect_create(parent,
+		MAX(width - 2 * corner_width, 0), theme->border_width, color);
+	wlr_scene_node_set_position(&ssd->border.top->node,
+		theme->border_width + corner_width,
+		-(ssd->titlebar.height + theme->border_width));
 	if (view->maximized == VIEW_AXIS_BOTH) {
 		wlr_scene_node_set_enabled(&ssd->border.tree->node, false);
 	}
@@ -12242,26 +12230,22 @@ ssd_border_update(struct ssd *ssd)
 	int top_x = ssd->titlebar.height <= 0 || ssd->state.was_squared
 		? 0
 		: theme->border_width + corner_width;
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_border_subtree *subtree = &ssd->border.subtrees[active];
-		wlr_scene_rect_set_size(subtree->left,
-			theme->border_width, side_height);
-		wlr_scene_node_set_position(&subtree->left->node,
-			0, side_y);
-		wlr_scene_rect_set_size(subtree->right,
-			theme->border_width, side_height);
-		wlr_scene_node_set_position(&subtree->right->node,
-			theme->border_width + width, side_y);
-		wlr_scene_rect_set_size(subtree->bottom,
-			full_width, theme->border_width);
-		wlr_scene_node_set_position(&subtree->bottom->node,
-			0, height);
-		wlr_scene_rect_set_size(subtree->top,
-			top_width, theme->border_width);
-		wlr_scene_node_set_position(&subtree->top->node,
-			top_x, -(ssd->titlebar.height + theme->border_width));
-	}
+	wlr_scene_rect_set_size(ssd->border.left,
+		theme->border_width, side_height);
+	wlr_scene_node_set_position(&ssd->border.left->node,
+		0, side_y);
+	wlr_scene_rect_set_size(ssd->border.right,
+		theme->border_width, side_height);
+	wlr_scene_node_set_position(&ssd->border.right->node,
+		theme->border_width + width, side_y);
+	wlr_scene_rect_set_size(ssd->border.bottom,
+		full_width, theme->border_width);
+	wlr_scene_node_set_position(&ssd->border.bottom->node,
+		0, height);
+	wlr_scene_rect_set_size(ssd->border.top,
+		top_width, theme->border_width);
+	wlr_scene_node_set_position(&ssd->border.top->node,
+		top_x, -(ssd->titlebar.height + theme->border_width));
 }
 void
 ssd_border_destroy(struct ssd *ssd)
@@ -12422,6 +12406,43 @@ ssd_extents_destroy(struct ssd *ssd)
 static void LABWC_src_ssd_ssd_titlebar_c_set_squared_corners(struct ssd *ssd, bool enable);
 static void LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(struct ssd *ssd, enum lab_node_type type, bool enable);
 static void LABWC_src_ssd_ssd_titlebar_c_update_visible_buttons(struct ssd *ssd);
+static void jtlabwc_accent_line_color(float out[4]);
+static int
+ssd_titlebar_accent_line_x(bool squared)
+{
+	struct theme *theme = rc.theme;
+	int x = squared ? 0 : ssd_get_corner_width();
+	x += MAX(1, theme->titlebar_height / 16);
+	if (rc.nr_title_buttons_left > 0) {
+		x += theme->window_titlebar_padding_width
+			+ rc.nr_title_buttons_left
+			* (theme->window_button_width
+				+ theme->window_button_spacing);
+	}
+	return x;
+}
+static int
+ssd_titlebar_accent_line_height(void)
+{
+	return MAX(2, rc.theme->titlebar_height / 2);
+}
+static int
+ssd_titlebar_accent_line_y(void)
+{
+	return (rc.theme->titlebar_height
+		- ssd_titlebar_accent_line_height()) / 2 + 1;
+}
+static void
+ssd_titlebar_accent_line_update(struct ssd *ssd, bool squared)
+{
+	struct wlr_scene_rect *accent_line = ssd->titlebar.accent_line;
+	if (!accent_line) {
+		return;
+	}
+	wlr_scene_node_set_position(&accent_line->node,
+		ssd_titlebar_accent_line_x(squared),
+		ssd_titlebar_accent_line_y());
+}
 void
 ssd_titlebar_create(struct ssd *ssd)
 {
@@ -12432,52 +12453,53 @@ ssd_titlebar_create(struct ssd *ssd)
 	ssd->titlebar.tree = lab_wlr_scene_tree_create(ssd->tree);
 	node_descriptor_create(&ssd->titlebar.tree->node,
 		LAB_NODE_TITLEBAR, view,   NULL);
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_titlebar_subtree *subtree = &ssd->titlebar.subtrees[active];
-		subtree->tree = lab_wlr_scene_tree_create(ssd->titlebar.tree);
-		struct wlr_scene_tree *parent = subtree->tree;
-		wlr_scene_node_set_enabled(&parent->node, active);
-		wlr_scene_node_set_position(&parent->node, 0, -theme->titlebar_height);
-		struct wlr_buffer *titlebar_fill =
-			&theme->window[active].titlebar_fill->base;
-		struct wlr_buffer *corner_top_left =
-			&theme->window[active].corner_top_left_normal->base;
-		struct wlr_buffer *corner_top_right =
-			&theme->window[active].corner_top_right_normal->base;
-		subtree->bar = lab_wlr_scene_buffer_create(parent, titlebar_fill);
-		if (wlr_renderer_is_pixman(server.renderer)) {
-			wlr_scene_buffer_set_filter_mode(
-				subtree->bar, WLR_SCALE_FILTER_NEAREST);
-		}
-		wlr_scene_node_set_position(&subtree->bar->node, corner_width, 0);
-		subtree->corner_left = lab_wlr_scene_buffer_create(parent, corner_top_left);
-		wlr_scene_node_set_position(&subtree->corner_left->node,
-			-rc.theme->border_width, -rc.theme->border_width);
-		subtree->corner_right = lab_wlr_scene_buffer_create(parent, corner_top_right);
-		wlr_scene_node_set_position(&subtree->corner_right->node,
-			width - corner_width, -rc.theme->border_width);
-		int x = theme->window_titlebar_padding_width;
-		int y = (theme->titlebar_height - theme->window_button_height) / 2;
-		wl_list_init(&subtree->buttons_left);
-		wl_list_init(&subtree->buttons_right);
-		for (int b = 0; b < rc.nr_title_buttons_left; b++) {
-			enum lab_node_type type = rc.title_buttons_left[b];
-			struct lab_img **imgs =
-				theme->window[active].button_imgs[type];
-			attach_ssd_button(&subtree->buttons_left, type, parent,
-				imgs, x, y, view);
-			x += theme->window_button_width + theme->window_button_spacing;
-		}
-		x = width - theme->window_titlebar_padding_width + theme->window_button_spacing;
-		for (int b = rc.nr_title_buttons_right - 1; b >= 0; b--) {
-			x -= theme->window_button_width + theme->window_button_spacing;
-			enum lab_node_type type = rc.title_buttons_right[b];
-			struct lab_img **imgs =
-				theme->window[active].button_imgs[type];
-			attach_ssd_button(&subtree->buttons_right, type, parent,
-				imgs, x, y, view);
-		}
+	wlr_scene_node_set_position(&ssd->titlebar.tree->node,
+		0, -theme->titlebar_height);
+	float accent_line_color[4];
+	jtlabwc_accent_line_color(accent_line_color);
+	int accent_line_height = ssd_titlebar_accent_line_height();
+	int accent_line_width = MAX(2, theme->titlebar_height / 8);
+	ssd->titlebar.bar = lab_wlr_scene_buffer_create(ssd->titlebar.tree,
+		&theme->window.titlebar_fill->base);
+	if (wlr_renderer_is_pixman(server.renderer)) {
+		wlr_scene_buffer_set_filter_mode(
+			ssd->titlebar.bar, WLR_SCALE_FILTER_NEAREST);
+	}
+	wlr_scene_node_set_position(&ssd->titlebar.bar->node,
+		corner_width, 0);
+	ssd->titlebar.accent_line = lab_wlr_scene_rect_create(
+		ssd->titlebar.tree, accent_line_width, accent_line_height,
+		accent_line_color);
+	ssd->titlebar.corner_left = lab_wlr_scene_buffer_create(
+		ssd->titlebar.tree,
+		&theme->window.corner_top_left_normal->base);
+	wlr_scene_node_set_position(&ssd->titlebar.corner_left->node,
+		-rc.theme->border_width, -rc.theme->border_width);
+	ssd->titlebar.corner_right = lab_wlr_scene_buffer_create(
+		ssd->titlebar.tree,
+		&theme->window.corner_top_right_normal->base);
+	wlr_scene_node_set_position(&ssd->titlebar.corner_right->node,
+		width - corner_width, -rc.theme->border_width);
+	int x = theme->window_titlebar_padding_width;
+	int y = (theme->titlebar_height - theme->window_button_height) / 2;
+	wl_list_init(&ssd->titlebar.buttons_left);
+	wl_list_init(&ssd->titlebar.buttons_right);
+	for (int b = 0; b < rc.nr_title_buttons_left; b++) {
+		enum lab_node_type type = rc.title_buttons_left[b];
+		struct lab_img **imgs =
+			theme->window.button_imgs[type];
+		attach_ssd_button(&ssd->titlebar.buttons_left, type,
+			ssd->titlebar.tree, imgs, x, y, view);
+		x += theme->window_button_width + theme->window_button_spacing;
+	}
+	x = width - theme->window_titlebar_padding_width + theme->window_button_spacing;
+	for (int b = rc.nr_title_buttons_right - 1; b >= 0; b--) {
+		x -= theme->window_button_width + theme->window_button_spacing;
+		enum lab_node_type type = rc.title_buttons_right[b];
+		struct lab_img **imgs =
+			theme->window.button_imgs[type];
+		attach_ssd_button(&ssd->titlebar.buttons_right, type,
+			ssd->titlebar.tree, imgs, x, y, view);
 	}
 	LABWC_src_ssd_ssd_titlebar_c_update_visible_buttons(ssd);
 	bool maximized = view->maximized == VIEW_AXIS_BOTH;
@@ -12521,43 +12543,36 @@ LABWC_src_ssd_ssd_titlebar_c_set_squared_corners(struct ssd *ssd, bool enable)
 	int corner_width = ssd_get_corner_width();
 	struct theme *theme = rc.theme;
 	int x = enable ? 0 : corner_width;
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_titlebar_subtree *subtree = &ssd->titlebar.subtrees[active];
-		wlr_scene_node_set_position(&subtree->bar->node, x, 0);
-		wlr_scene_buffer_set_dest_size(subtree->bar,
-			MAX(width - 2 * x, 0), theme->titlebar_height);
-		wlr_scene_node_set_enabled(&subtree->corner_left->node, !enable);
-		wlr_scene_node_set_enabled(&subtree->corner_right->node, !enable);
-		struct ssd_button *button;
-		wl_list_for_each(button, &subtree->buttons_left, link) {
-			LABWC_src_ssd_ssd_titlebar_c_update_button_state(button, LAB_BS_ROUNDED, !enable);
-			break;
-		}
-		wl_list_for_each(button, &subtree->buttons_right, link) {
-			LABWC_src_ssd_ssd_titlebar_c_update_button_state(button, LAB_BS_ROUNDED, !enable);
-			break;
-		}
+	wlr_scene_node_set_position(&ssd->titlebar.bar->node, x, 0);
+	wlr_scene_buffer_set_dest_size(ssd->titlebar.bar,
+		MAX(width - 2 * x, 0), theme->titlebar_height);
+	wlr_scene_node_set_enabled(&ssd->titlebar.corner_left->node, !enable);
+	wlr_scene_node_set_enabled(&ssd->titlebar.corner_right->node, !enable);
+	struct ssd_button *button;
+	wl_list_for_each(button, &ssd->titlebar.buttons_left, link) {
+		LABWC_src_ssd_ssd_titlebar_c_update_button_state(button, LAB_BS_ROUNDED, !enable);
+		break;
 	}
+	wl_list_for_each(button, &ssd->titlebar.buttons_right, link) {
+		LABWC_src_ssd_ssd_titlebar_c_update_button_state(button, LAB_BS_ROUNDED, !enable);
+		break;
+	}
+	ssd_titlebar_accent_line_update(ssd, enable);
 }
 static void
 LABWC_src_ssd_ssd_titlebar_c_set_alt_button_icon(struct ssd *ssd, enum lab_node_type type, bool enable)
 {
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_titlebar_subtree *subtree = &ssd->titlebar.subtrees[active];
-		struct ssd_button *button;
-		wl_list_for_each(button, &subtree->buttons_left, link) {
-			if (button->type == type) {
-				LABWC_src_ssd_ssd_titlebar_c_update_button_state(button,
-					LAB_BS_TOGGLED, enable);
-			}
+	struct ssd_button *button;
+	wl_list_for_each(button, &ssd->titlebar.buttons_left, link) {
+		if (button->type == type) {
+			LABWC_src_ssd_ssd_titlebar_c_update_button_state(button,
+				LAB_BS_TOGGLED, enable);
 		}
-		wl_list_for_each(button, &subtree->buttons_right, link) {
-			if (button->type == type) {
-				LABWC_src_ssd_ssd_titlebar_c_update_button_state(button,
-					LAB_BS_TOGGLED, enable);
-			}
+	}
+	wl_list_for_each(button, &ssd->titlebar.buttons_right, link) {
+		if (button->type == type) {
+			LABWC_src_ssd_ssd_titlebar_c_update_button_state(button,
+				LAB_BS_TOGGLED, enable);
 		}
 	}
 }
@@ -12580,22 +12595,18 @@ LABWC_src_ssd_ssd_titlebar_c_update_visible_buttons(struct ssd *ssd)
 			button_count_right--;
 		}
 	}
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_titlebar_subtree *subtree = &ssd->titlebar.subtrees[active];
-		int button_count = 0;
-		struct ssd_button *button;
-		wl_list_for_each(button, &subtree->buttons_left, link) {
-			wlr_scene_node_set_enabled(button->node,
-				button_count < button_count_left);
-			button_count++;
-		}
-		button_count = 0;
-		wl_list_for_each(button, &subtree->buttons_right, link) {
-			wlr_scene_node_set_enabled(button->node,
-				button_count < button_count_right);
-			button_count++;
-		}
+	int button_count = 0;
+	struct ssd_button *button;
+	wl_list_for_each(button, &ssd->titlebar.buttons_left, link) {
+		wlr_scene_node_set_enabled(button->node,
+			button_count < button_count_left);
+		button_count++;
+	}
+	button_count = 0;
+	wl_list_for_each(button, &ssd->titlebar.buttons_right, link) {
+		wlr_scene_node_set_enabled(button->node,
+			button_count < button_count_right);
+		button_count++;
 	}
 }
 void
@@ -12628,25 +12639,21 @@ ssd_titlebar_update(struct ssd *ssd)
 	int y = (theme->titlebar_height - theme->window_button_height) / 2;
 	int x;
 	int bg_offset = maximized || squared ? 0 : corner_width;
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct ssd_titlebar_subtree *subtree = &ssd->titlebar.subtrees[active];
-		wlr_scene_buffer_set_dest_size(subtree->bar,
-			MAX(width - bg_offset * 2, 0), theme->titlebar_height);
-		x = theme->window_titlebar_padding_width;
-		struct ssd_button *button;
-		wl_list_for_each(button, &subtree->buttons_left, link) {
-			wlr_scene_node_set_position(button->node, x, y);
-			x += theme->window_button_width + theme->window_button_spacing;
-		}
-		x = width - corner_width;
-		wlr_scene_node_set_position(&subtree->corner_right->node,
-			x, -rc.theme->border_width);
-		x = width - theme->window_titlebar_padding_width + theme->window_button_spacing;
-		wl_list_for_each(button, &subtree->buttons_right, link) {
-			x -= theme->window_button_width + theme->window_button_spacing;
-			wlr_scene_node_set_position(button->node, x, y);
-		}
+	wlr_scene_buffer_set_dest_size(ssd->titlebar.bar,
+		MAX(width - bg_offset * 2, 0), theme->titlebar_height);
+	x = theme->window_titlebar_padding_width;
+	struct ssd_button *button;
+	wl_list_for_each(button, &ssd->titlebar.buttons_left, link) {
+		wlr_scene_node_set_position(button->node, x, y);
+		x += theme->window_button_width + theme->window_button_spacing;
+	}
+	x = width - corner_width;
+	wlr_scene_node_set_position(&ssd->titlebar.corner_right->node,
+		x, -rc.theme->border_width);
+	x = width - theme->window_titlebar_padding_width + theme->window_button_spacing;
+	wl_list_for_each(button, &ssd->titlebar.buttons_right, link) {
+		x -= theme->window_button_width + theme->window_button_spacing;
+		wlr_scene_node_set_position(button->node, x, y);
 	}
 }
 void
@@ -12885,21 +12892,29 @@ ssd_mode_parse(const char *mode)
 		return LAB_SSD_MODE_INVALID;
 	}
 }
+static void
+ssd_update_top_border_color(struct ssd *ssd)
+{
+	if (!ssd->border.top) {
+		return;
+	}
+	float *color = ssd->active && ssd->inhibits_keybinds
+		? rc.theme->window_toggled_keybinds_color
+		: rc.theme->window.border_color;
+	wlr_scene_rect_set_color(ssd->border.top, color);
+}
 void
 ssd_set_active(struct ssd *ssd, bool active)
 {
 	if (!ssd) {
 		return;
 	}
-	enum ssd_active_state active_state;
-	FOR_EACH_ACTIVE_STATE(active_state) {
+	ssd->active = active;
+	if (ssd->titlebar.accent_line) {
 		wlr_scene_node_set_enabled(
-			&ssd->border.subtrees[active_state].tree->node,
-			active == active_state);
-		wlr_scene_node_set_enabled(
-			&ssd->titlebar.subtrees[active_state].tree->node,
-			active == active_state);
+			&ssd->titlebar.accent_line->node, active);
 	}
+	ssd_update_top_border_color(ssd);
 }
 void
 ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable)
@@ -12907,10 +12922,8 @@ ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable)
 	if (!ssd) {
 		return;
 	}
-	float *color = enable
-		? rc.theme->window_toggled_keybinds_color
-		: rc.theme->window[SSD_ACTIVE].border_color;
-	wlr_scene_rect_set_color(ssd->border.subtrees[SSD_ACTIVE].top, color);
+	ssd->inhibits_keybinds = enable;
+	ssd_update_top_border_color(ssd);
 }
 #ifdef FULLSCREEN_TEARING
 struct LABWC_src_tearing_c_tearing_controller {
@@ -13026,12 +13039,12 @@ LABWC_src_theme_c_round_right_corner_button(cairo_t *cairo, int w, int h)
 	LABWC_src_theme_c_round_left_corner_button(cairo, w, h);
 }
 static void
-LABWC_src_theme_c_load_button(struct theme *theme, struct LABWC_src_theme_c_button *b, enum ssd_active_state active)
+LABWC_src_theme_c_load_button(struct theme *theme, struct LABWC_src_theme_c_button *b)
 {
 	struct lab_img *(*button_imgs)[LAB_BS_ALL + 1] =
-		theme->window[active].button_imgs;
+		theme->window.button_imgs;
 	struct lab_img **img = &button_imgs[b->type][b->state_set];
-	float *rgba = theme->window[active].button_colors[b->type];
+	float *rgba = theme->window.button_colors[b->type];
 	assert(!*img);
 	if (!*img && b->fallback_button) {
 		*img = lab_img_load_from_bitmap(b->fallback_button, rgba);
@@ -13129,8 +13142,7 @@ LABWC_src_theme_c_load_buttons(struct theme *theme)
 	}, };
 	for (size_t i = 0; i < ARRAY_SIZE(buttons); ++i) {
 		struct LABWC_src_theme_c_button *b = &buttons[i];
-		LABWC_src_theme_c_load_button(theme, b, SSD_INACTIVE);
-		LABWC_src_theme_c_load_button(theme, b, SSD_ACTIVE);
+		LABWC_src_theme_c_load_button(theme, b);
 	}
 }
 static int
@@ -13197,22 +13209,14 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	theme->border_width = 1;
 	theme->window_titlebar_padding_height = 0;
 	theme->window_titlebar_padding_width = 0;
-	LABWC_src_theme_c_parse_hexstr("#404040", theme->window[SSD_ACTIVE].border_color);
-	LABWC_src_theme_c_parse_hexstr("#404040", theme->window[SSD_INACTIVE].border_color);
+	LABWC_src_theme_c_parse_hexstr("#404040", theme->window.border_color);
 	LABWC_src_theme_c_parse_hexstr("#ff0000", theme->window_toggled_keybinds_color);
-	theme->window[SSD_ACTIVE].title_bg.gradient = LAB_GRADIENT_NONE;
-	theme->window[SSD_INACTIVE].title_bg.gradient = LAB_GRADIENT_NONE;
-	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->window[SSD_ACTIVE].title_bg.color);
-	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->window[SSD_INACTIVE].title_bg.color);
-	theme->window[SSD_ACTIVE].title_bg.color_split_to[0] = FLT_MIN;
-	theme->window[SSD_INACTIVE].title_bg.color_split_to[0] = FLT_MIN;
-	theme->window[SSD_ACTIVE].title_bg.color_to[0] = FLT_MIN;
-	theme->window[SSD_INACTIVE].title_bg.color_to[0] = FLT_MIN;
-	theme->window[SSD_ACTIVE].title_bg.color_to_split_to[0] = FLT_MIN;
-	theme->window[SSD_INACTIVE].title_bg.color_to_split_to[0] = FLT_MIN;
-	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->window[SSD_ACTIVE].label_text_color);
-	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->window[SSD_INACTIVE].label_text_color);
-	theme->window_label_text_justify = LABWC_src_theme_c_parse_justification("Center");
+	theme->window.title_bg.gradient = LAB_GRADIENT_NONE;
+	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->window.title_bg.color);
+	theme->window.title_bg.color_split_to[0] = FLT_MIN;
+	theme->window.title_bg.color_to[0] = FLT_MIN;
+	theme->window.title_bg.color_to_split_to[0] = FLT_MIN;
+	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->window.label_text_color);
 	theme->window_button_width = 26;
 	theme->window_button_height = 26;
 	theme->window_button_spacing = 0;
@@ -13221,9 +13225,7 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 	for (enum lab_node_type type = LAB_NODE_BUTTON_FIRST;
 			type <= LAB_NODE_BUTTON_LAST; type++) {
 		LABWC_src_theme_c_parse_hexstr("#ffffff",
-			theme->window[SSD_INACTIVE].button_colors[type]);
-		LABWC_src_theme_c_parse_hexstr("#ffffff",
-			theme->window[SSD_ACTIVE].button_colors[type]);
+			theme->window.button_colors[type]);
 	}
 	theme->menu_overlap_x = 0;
 	theme->menu_overlap_y = 0;
@@ -13398,15 +13400,15 @@ LABWC_src_theme_c_create_titlebar_fill(cairo_pattern_t *pattern, int height)
 static void
 LABWC_src_theme_c_create_backgrounds(struct theme *theme)
 {
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		theme->window[active].titlebar_pattern = LABWC_src_theme_c_create_titlebar_pattern(
-			&theme->window[active].title_bg,
+	/* Active and inactive windows share one titlebar background. */
+	theme->window.titlebar_pattern =
+		LABWC_src_theme_c_create_titlebar_pattern(
+			&theme->window.title_bg,
 			theme->titlebar_height);
-		theme->window[active].titlebar_fill = LABWC_src_theme_c_create_titlebar_fill(
-			theme->window[active].titlebar_pattern,
+	theme->window.titlebar_fill =
+		LABWC_src_theme_c_create_titlebar_fill(
+			theme->window.titlebar_pattern,
 			theme->titlebar_height);
-	}
 }
 static void
 LABWC_src_theme_c_create_corners(struct theme *theme)
@@ -13418,20 +13420,19 @@ LABWC_src_theme_c_create_corners(struct theme *theme)
 		.width = corner_width + theme->border_width,
 		.height = theme->titlebar_height + theme->border_width,
 	};
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		struct LABWC_src_theme_c_rounded_corner_ctx ctx = {
-			.box = &box,
-			.radius = rc.corner_radius,
-			.line_width = theme->border_width,
-			.fill_pattern = theme->window[active].titlebar_pattern,
-			.border_color = theme->window[active].border_color,
-			.corner = ROUNDED_CORNER_TOP_LEFT,
-		};
-		theme->window[active].corner_top_left_normal = LABWC_src_theme_c_rounded_rect(&ctx);
-		ctx.corner = ROUNDED_CORNER_TOP_RIGHT;
-		theme->window[active].corner_top_right_normal = LABWC_src_theme_c_rounded_rect(&ctx);
-	}
+	struct LABWC_src_theme_c_rounded_corner_ctx ctx = {
+		.box = &box,
+		.radius = rc.corner_radius,
+		.line_width = theme->border_width,
+		.fill_pattern = theme->window.titlebar_pattern,
+		.border_color = theme->window.border_color,
+		.corner = ROUNDED_CORNER_TOP_LEFT,
+	};
+	theme->window.corner_top_left_normal =
+		LABWC_src_theme_c_rounded_rect(&ctx);
+	ctx.corner = ROUNDED_CORNER_TOP_RIGHT;
+	theme->window.corner_top_right_normal =
+		LABWC_src_theme_c_rounded_rect(&ctx);
 }
 static void
 LABWC_src_theme_c_copy_color_scaled(float dest[4], const float src[4], float scale)
@@ -13469,8 +13470,7 @@ static void
 LABWC_src_theme_c_post_processing(struct theme *theme)
 {
 	theme->titlebar_height = LABWC_src_theme_c_get_titlebar_height(theme);
-	LABWC_src_theme_c_fill_background_colors(&theme->window[SSD_INACTIVE].title_bg);
-	LABWC_src_theme_c_fill_background_colors(&theme->window[SSD_ACTIVE].title_bg);
+	LABWC_src_theme_c_fill_background_colors(&theme->window.title_bg);
 	theme->menu_item_height = font_height(&rc.font_menuitem)
 		+ 2 * theme->menu_items_padding_y;
 	theme->menu_header_height = font_height(&rc.font_menuheader)
@@ -13494,12 +13494,12 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 	}
 	if (theme->menu_border_color[0] == FLT_MIN) {
 		memcpy(theme->menu_border_color,
-			theme->window[SSD_ACTIVE].border_color,
+			theme->window.border_color,
 			sizeof(theme->menu_border_color));
 	}
 	if (theme->osd_bg_color[0] == FLT_MIN) {
 		memcpy(theme->osd_bg_color,
-			theme->window[SSD_ACTIVE].title_bg.color,
+			theme->window.title_bg.color,
 			sizeof(theme->osd_bg_color));
 	}
 	if (theme->osd_border_width == INT_MIN) {
@@ -13507,7 +13507,7 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 	}
 	if (theme->osd_label_text_color[0] == FLT_MIN) {
 		memcpy(theme->osd_label_text_color,
-			theme->window[SSD_ACTIVE].label_text_color,
+			theme->window.label_text_color,
 			sizeof(theme->osd_label_text_color));
 	}
 	if (theme->osd_border_color[0] == FLT_MIN) {
@@ -13557,19 +13557,14 @@ theme_finish(struct theme *theme)
 			type <= LAB_NODE_BUTTON_LAST; type++) {
 		for (uint8_t state_set = LAB_BS_DEFAULT;
 				state_set <= LAB_BS_ALL; state_set++) {
-			LABWC_src_theme_c_destroy_img(&theme->window[SSD_INACTIVE]
-				.button_imgs[type][state_set]);
-			LABWC_src_theme_c_destroy_img(&theme->window[SSD_ACTIVE]
+			LABWC_src_theme_c_destroy_img(&theme->window
 				.button_imgs[type][state_set]);
 		}
 	}
-	enum ssd_active_state active;
-	FOR_EACH_ACTIVE_STATE(active) {
-		zfree_pattern(theme->window[active].titlebar_pattern);
-		LABWC_src_theme_c_zdrop(&theme->window[active].titlebar_fill);
-		LABWC_src_theme_c_zdrop(&theme->window[active].corner_top_left_normal);
-		LABWC_src_theme_c_zdrop(&theme->window[active].corner_top_right_normal);
-	}
+	zfree_pattern(theme->window.titlebar_pattern);
+	LABWC_src_theme_c_zdrop(&theme->window.titlebar_fill);
+	LABWC_src_theme_c_zdrop(&theme->window.corner_top_left_normal);
+	LABWC_src_theme_c_zdrop(&theme->window.corner_top_right_normal);
 }
 #undef zero_array
 #define JTLABWC_CONTROL_SOCKET "jtlabwc-ctl.sock"
@@ -13589,6 +13584,7 @@ struct jtlabwc_control_client {
 };
 static struct jtlabwc_control_color jtlabwc_close_color;
 static struct jtlabwc_control_color jtlabwc_snap_color;
+static struct jtlabwc_control_color jtlabwc_accent_color;
 static int jtlabwc_control_fd = -1;
 static struct wl_event_source *jtlabwc_control_source;
 static char jtlabwc_control_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -13658,16 +13654,28 @@ jtlabwc_control_apply_color(float out[4], const struct jtlabwc_control_color *co
 	out[2] = color->b * alpha;
 	out[3] = alpha;
 }
+/* Colour of the vertical stripe on the active SSD titlebar.  It follows the
+ * accent sent by jtlabwcctl/JTLab and falls back to the theme's close-button
+ * colour so the stripe is still visible before an accent arrives. */
+static void
+jtlabwc_accent_line_color(float out[4])
+{
+	if (rc.theme) {
+		const float *fallback = rc.theme->window
+			.button_colors[LAB_NODE_BUTTON_CLOSE];
+		memcpy(out, fallback, sizeof(float) * 4);
+	} else {
+		out[0] = out[1] = out[2] = out[3] = 1.0f;
+	}
+	jtlabwc_control_apply_color(out, &jtlabwc_accent_color);
+}
 static void
 jtlabwc_control_apply_theme_overrides(struct theme *theme)
 {
 	if (jtlabwc_close_color.set) {
-		enum ssd_active_state active;
-		FOR_EACH_ACTIVE_STATE(active) {
-			jtlabwc_control_apply_color(
-				theme->window[active].button_colors[LAB_NODE_BUTTON_CLOSE],
-				&jtlabwc_close_color);
-		}
+		jtlabwc_control_apply_color(
+			theme->window.button_colors[LAB_NODE_BUTTON_CLOSE],
+			&jtlabwc_close_color);
 	}
 	if (jtlabwc_snap_color.set) {
 		jtlabwc_control_apply_color(
@@ -14009,9 +14017,11 @@ jtlabwc_control_process_line(char *line)
 	char *argument = strtok_r(NULL, " \t\r", &saveptr);
 	bool set_close = false;
 	bool set_snap = false;
+	bool set_accent = false;
 	if (!strcmp(command, "accent")) {
 		set_close = true;
 		set_snap = true;
+		set_accent = true;
 	} else if (!strcmp(command, "close")) {
 		set_close = true;
 	} else if (!strcmp(command, "snap")) {
@@ -14022,12 +14032,14 @@ jtlabwc_control_process_line(char *line)
 	} else if (!strcmp(command, "reset")) {
 		jtlabwc_close_color = (struct jtlabwc_control_color){0};
 		jtlabwc_snap_color = (struct jtlabwc_control_color){0};
+		jtlabwc_accent_color = (struct jtlabwc_control_color){0};
 		jtlabwc_control_refresh();
 		return;
 	} else {
 		argument = command;
 		set_close = true;
 		set_snap = true;
+		set_accent = true;
 	}
 	if (!argument) {
 		return;
@@ -14041,6 +14053,9 @@ jtlabwc_control_process_line(char *line)
 	}
 	if (set_snap) {
 		jtlabwc_snap_color = color;
+	}
+	if (set_accent) {
+		jtlabwc_accent_color = color;
 	}
 	jtlabwc_control_refresh();
 }

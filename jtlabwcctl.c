@@ -1,9 +1,10 @@
-/* jtlabwcctl — change jtlabwc's SSD close-button and snap-overlay colors.
+/* jtlabwcctl — change jtlabwc's SSD accent colors.
  *
  * Usage:
  *   jtlabwcctl close '#RRGGBB'    close button on the SSD
  *   jtlabwcctl snap '#RRGGBB'     window snapping overlay
- *   jtlabwcctl accent '#RRGGBB'   both of the above
+ *   jtlabwcctl accent '#RRGGBB'   close button, snap overlay and active
+ *                                 titlebar stripe
  *   jtlabwcctl '#RRGGBB'          shorthand for accent
  *   jtlabwcctl reload             re-read ~/.config/jt/input.conf
  *   jtlabwcctl reset              return to the theme colors
@@ -73,7 +74,7 @@ usage(const char *prog)
 		"       %s COLOR\n"
 		"  close COLOR    change the SSD close-button color\n"
 		"  snap COLOR     change the window snapping overlay color\n"
-		"  accent COLOR   change both colors\n"
+		"  accent COLOR   change both colors and the active titlebar stripe\n"
 		"  COLOR          shorthand for accent\n"
 		"  reload         re-read ~/.config/jt/input.conf\n"
 		"  reset          return to the theme colors\n"
