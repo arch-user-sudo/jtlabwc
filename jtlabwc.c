@@ -18011,7 +18011,7 @@ LABWC_src_xdg_c_xdg_toplevel_view_configure(struct view *view, struct wlr_box ge
 	if (geo.width != view->pending.width
 			|| geo.height != view->pending.height) {
 		if (toplevel->base->initialized) {
-			if (geo.width > 0 && geo.height > 0) {
+			if (geo.width >= 0 && geo.height >= 0) {
 				serial = wlr_xdg_toplevel_set_size(toplevel,
 						geo.width, geo.height);
 			} else {
