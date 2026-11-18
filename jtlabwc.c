@@ -401,9 +401,6 @@ void key_state_store_pressed_key_as_bound(uint32_t keycode);
 bool key_state_corresponding_press_event_was_bound(uint32_t keycode);
 void key_state_bound_key_remove(uint32_t keycode);
 #define LABWC_VERSION "0.20.2"
-#define XDG_CONFIG_HOME "/home/lynch/.config"
-#define XDG_RUNTIME_DIR "/run/user/1000"
-#define XDG_CONFIG_DIRS "/etc/xdg"
 #ifdef XWAYLAND
 #define HAVE_XWAYLAND 1
 #else
@@ -20353,102 +20350,6 @@ static const char * const LABWC_src_config_session_c_env_vars[] = {
 	"LABWC_VER",
 	NULL
 };
-#define LAB_ENV_VAR_MAX_SIZE 1024
-static void
-LABWC_src_config_session_c_process_line(char *line)
-{
-	if (string_null_or_empty(line) || line[0] == '#') {
-		return;
-	}
-	char *key = NULL;
-	char *p = strchr(line, '=');
-	if (!p) {
-		return;
-	}
-	*p = '\0';
-	key = string_strip(line);
-	if (string_null_or_empty(key)) {
-		return;
-	}
-	struct buf value = BUF_INIT;
-	buf_add(&value, string_strip(++p));
-	if (value.len > LAB_ENV_VAR_MAX_SIZE) {
-		goto err;
-	}
-	buf_expand_shell_variables(&value);
-	buf_expand_tilde(&value);
-	setenv(key, value.data, 1);
-err:
-	buf_reset(&value);
-}
-#undef LAB_ENV_VAR_MAX_SIZE
-static bool
-LABWC_src_config_session_c_read_environment_file(const char *filename)
-{
-	char *line = NULL;
-	size_t len = 0;
-	FILE *stream = fopen(filename, "r");
-	if (!stream) {
-		return false;
-	}
-	while (getline(&line, &len, stream) != -1) {
-		char *p = strrchr(line, '\n');
-		if (p) {
-			*p = '\0';
-		}
-		LABWC_src_config_session_c_process_line(line);
-	}
-	free(line);
-	fclose(stream);
-	return true;
-}
-static char *
-LABWC_src_config_session_c_strdup_env_path_validate(const char *prefix, struct dirent *dirent)
-{
-	assert(prefix);
-	char *full_path = strdup_printf("%s/%s", prefix, dirent->d_name);
-	if (!full_path) {
-		return NULL;
-	}
-	struct stat statbuf;
-	if (stat(full_path, &statbuf) == 0 && S_ISREG(statbuf.st_mode)) {
-		return full_path;
-	}
-	free(full_path);
-	return NULL;
-}
-static int
-LABWC_src_config_session_c_env_file_filter(const struct dirent *dirent)
-{
-	return str_endswith(dirent->d_name, ".env");
-}
-static bool
-LABWC_src_config_session_c_read_environment_dir(const char *path_prefix)
-{
-	bool success = false;
-	char *path = strdup_printf("%s.d", path_prefix);
-	struct dirent **dirlist = NULL;
-	errno = 0;
-	int num_entries = scandir(path, &dirlist, LABWC_src_config_session_c_env_file_filter, alphasort);
-	if (num_entries < 0) {
-		goto env_dir_cleanup;
-	}
-	for (int i = 0; i < num_entries; i++) {
-		char *env_file_path = LABWC_src_config_session_c_strdup_env_path_validate(path, dirlist[i]);
-		free(dirlist[i]);
-		if (!env_file_path) {
-			continue;
-		}
-		if (LABWC_src_config_session_c_read_environment_file(env_file_path)) {
-			success = true;
-		}
-		free(env_file_path);
-	}
-	free(dirlist);
-env_dir_cleanup:
-	free(path);
-	return success;
-}
 static void
 LABWC_src_config_session_c_backend_check_drm(struct wlr_backend *backend, void *is_drm)
 {
@@ -20508,19 +20409,15 @@ LABWC_src_config_session_c_update_activation_env(bool initialize)
 void
 session_environment_init(void)
 {
+	/*
+	 * Do not load environment variables from config files.
+	 * Session-critical variables are provided by the runtime/login
+	 * environment or set explicitly by the compositor (e.g. WAYLAND_DISPLAY,
+	 * DISPLAY for XWayland) and propagated to activation services below.
+	 */
 	setenv("XDG_CURRENT_DESKTOP", "labwc:wlroots", 0);
+	setenv("XDG_SESSION_TYPE", "wayland", 0);
 	setenv("_JAVA_AWT_WM_NONREPARENTING", "1", 0);
-	struct wl_list paths;
-	paths_config_create(&paths, "environment");
-	struct path *path;
-	wl_list_for_each(path, &paths, link) {
-		bool success = LABWC_src_config_session_c_read_environment_file(path->string);
-		success |= LABWC_src_config_session_c_read_environment_dir(path->string);
-		if (success) {
-			break;
-		}
-	}
-	paths_destroy(&paths);
 }
 static const char * const LABWC_src_config_session_c_autostart_commands[] = {
 	"jtlab",
