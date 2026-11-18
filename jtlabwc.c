@@ -13982,6 +13982,65 @@ jtlabwc_keyboard_config_apply(void)
 	}
 }
 
+#define JTLABWC_DISPLAYS_CONFIG "displays.conf"
+static void
+jtlabwc_displays_config_load(void)
+{
+	const char *home = getenv("HOME");
+	if (!home || !*home) {
+		return;
+	}
+	char path[512];
+	snprintf(path, sizeof(path), "%s/.config/jt/%s", home,
+		JTLABWC_DISPLAYS_CONFIG);
+	FILE *file = fopen(path, "r");
+	if (!file) {
+		return;
+	}
+	char line[256];
+	while (fgets(line, sizeof(line), file)) {
+		char *p = line;
+		while (*p == ' ' || *p == '\t') {
+			p++;
+		}
+		if (*p == '#' || *p == '\n' || *p == '\0') {
+			continue;
+		}
+		if (strncmp(p, "output=", 7) != 0) {
+			continue;
+		}
+		p += 7;
+		char name[128];
+		name[0] = '\0';
+		int x = 0, y = 0;
+		char *comma = strchr(p, ',');
+		if (!comma) {
+			continue;
+		}
+		size_t nlen = (size_t)(comma - p);
+		if (nlen >= sizeof(name)) {
+			nlen = sizeof(name) - 1;
+		}
+		memcpy(name, p, nlen);
+		name[nlen] = '\0';
+		char *rest = comma + 1;
+		char *xstr = strstr(rest, "x=");
+		char *ystr = strstr(rest, "y=");
+		if (xstr) {
+			x = atoi(xstr + 2);
+		}
+		if (ystr) {
+			y = atoi(ystr + 2);
+		}
+		struct output *out = output_from_name(name);
+		if (out && out->wlr_output && server.output_layout) {
+			wlr_output_layout_add(server.output_layout,
+				out->wlr_output, x, y);
+		}
+	}
+	fclose(file);
+	LABWC_src_output_c_do_output_layout_change();
+}
 static void
 jtlabwc_config_reload(void)
 {
@@ -13990,6 +14049,7 @@ jtlabwc_config_reload(void)
 	jtlabwc_keyboard_config_apply();
 	jtlabwc_keybinds_config_load();
 	jtlabwc_keybinds_config_apply();
+	jtlabwc_displays_config_load();
 }
 
 static void
