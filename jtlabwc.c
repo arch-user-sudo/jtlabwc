@@ -20526,6 +20526,7 @@ static const char * const LABWC_src_config_session_c_autostart_commands[] = {
 	"jtlab",
 	"jtstartup",
 	"jtwpi",
+	"jtpolkit",
 	NULL,
 };
 static const char * const LABWC_src_config_session_c_shutdown_commands[] = {
