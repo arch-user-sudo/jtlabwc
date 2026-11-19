@@ -11539,7 +11539,8 @@ session_lock_output_create(struct session_lock_manager *manager, struct output *
 	}
 	struct LABWC_src_session_lock_c_session_lock_output *lock_output = znew(*lock_output);
 	struct wlr_scene_tree *tree = lab_wlr_scene_tree_create(output->session_lock_tree);
-	float black[4] = { 0.f, 0.f, 0.f, 1.f };
+	/* Transparent so the lock client can control background opacity. */
+	float black[4] = { 0.f, 0.f, 0.f, 0.f };
 	struct wlr_scene_rect *background = lab_wlr_scene_rect_create(tree, 0, 0, black);
 	lock_output->blank_timer =
 		wl_event_loop_add_timer(server.wl_event_loop,
