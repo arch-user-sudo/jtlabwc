@@ -3886,7 +3886,7 @@ LABWC_src_common_string_helpers_c_rtrim(char *s)
 		return;
 	}
 	char *end = s + len - 1;
-	while (end >= s && isspace(*end)) {
+	while (end >= s && isspace((unsigned char)*end)) {
 		end--;
 	}
 	*(end + 1) = '\0';
@@ -3894,7 +3894,7 @@ LABWC_src_common_string_helpers_c_rtrim(char *s)
 char *
 string_strip(char *s)
 {
-	while (isspace(*s)) {
+	while (isspace((unsigned char)*s)) {
 		s++;
 	}
 	LABWC_src_common_string_helpers_c_rtrim(s);
@@ -4039,7 +4039,7 @@ LABWC_src_common_buf_c_strip_curly_braces(char *s)
 static bool
 LABWC_src_common_buf_c_isvalid(char p)
 {
-	return isalnum(p) || p == '_' || p == '{' || p == '}';
+	return isalnum((unsigned char)p) || p == '_' || p == '{' || p == '}';
 }
 void
 buf_expand_shell_variables(struct buf *s)
@@ -4098,6 +4098,11 @@ buf_add_fmt(struct buf *s, const char *fmt, ...)
 	if (n < 0) {
 		return;
 	}
+	/* struct buf uses int lengths; reject output that would overflow it
+	 * (vsnprintf can return INT_MAX for very large formats). */
+	if (s->len >= INT_MAX || (size_t)n + 1 > (size_t)(INT_MAX - s->len)) {
+		return;
+	}
 	size_t size = (size_t)n + 1;
 	LABWC_src_common_buf_c_buf_expand(s, s->len + (int)size);
 	va_start(ap, fmt);
@@ -4115,10 +4120,15 @@ buf_add(struct buf *s, const char *data)
 	if (string_null_or_empty(data)) {
 		return;
 	}
-	int len = (int)strlen(data);
-	LABWC_src_common_buf_c_buf_expand(s, s->len + len + 1);
-	memcpy(s->data + s->len, data, (size_t)len);
-	s->len += len;
+	size_t len = strlen(data);
+	/* Casting strlen() to int can wrap negative for huge strings, which
+	 * would under-allocate in buf_expand() and then overflow in memcpy. */
+	if (s->len >= INT_MAX || len > (size_t)(INT_MAX - s->len - 1)) {
+		return;
+	}
+	LABWC_src_common_buf_c_buf_expand(s, s->len + (int)len + 1);
+	memcpy(s->data + s->len, data, len);
+	s->len += (int)len;
 	s->data[s->len] = 0;
 }
 void
@@ -4577,6 +4587,9 @@ lab_img_load_from_bitmap(const char *bitmap, float *rgba)
 struct lab_img *
 lab_img_copy(struct lab_img *img)
 {
+	if (!img) {
+		return NULL;
+	}
 	struct lab_img *new_img = LABWC_src_img_img_c_create_img(img->data);
 	wl_array_copy(&new_img->modifiers, &img->modifiers);
 	return new_img;
@@ -5507,6 +5520,11 @@ LABWC_src_dnd_c_handle_drag_start(struct wl_listener *listener, void *data)
 	seat->drag.active = true;
 	cursor_context_save(&seat->pressed, NULL);
 	if (drag->icon) {
+		/* The tree keeps its last position after a drag ends.  Reset it
+		 * before showing the new icon, otherwise the first frame of this
+		 * drag can be drawn at the previous drag's location (or 0,0)
+		 * until the first motion event moves it. */
+		dnd_icons_move(seat, seat->cursor->x, seat->cursor->y);
 		wlr_scene_drag_icon_create(seat->drag.icons, drag->icon);
 		wlr_scene_node_raise_to_top(&seat->drag.icons->node);
 		wlr_scene_node_set_enabled(&seat->drag.icons->node, true);
@@ -5554,6 +5572,10 @@ dnd_icons_show(struct seat *seat, bool show)
 void
 dnd_icons_move(struct seat *seat, double x, double y)
 {
+	/* Keep the drag icon above nodes that get raised mid-drag (overlays,
+	 * popups, newly mapped views/outputs).  It is already raised once when
+	 * the drag starts; this preserves that ordering for the whole drag. */
+	wlr_scene_node_raise_to_top(&seat->drag.icons->node);
 	wlr_scene_node_set_position(&seat->drag.icons->node, (int)x, (int)y);
 }
 void dnd_finish(struct seat *seat)
@@ -7003,11 +7025,18 @@ LABWC_src_input_cursor_c_cursor_load(struct seat *seat)
 {
 	const char *xcursor_theme = getenv("XCURSOR_THEME");
 	const char *xcursor_size = getenv("XCURSOR_SIZE");
-	uint32_t size = xcursor_size ? (uint32_t)atoi(xcursor_size) : 24;
+	long size_long = xcursor_size ? strtol(xcursor_size, NULL, 10) : 24;
+	if (size_long < 1 || size_long > UINT32_MAX) {
+		size_long = 24;
+	}
+	uint32_t size = (uint32_t)size_long;
 	if (seat->xcursor_manager) {
 		wlr_xcursor_manager_destroy(seat->xcursor_manager);
 	}
 	seat->xcursor_manager = wlr_xcursor_manager_create(xcursor_theme, size);
+	if (!seat->xcursor_manager) {
+		exit(EXIT_FAILURE);
+	}
 	wlr_xcursor_manager_load(seat->xcursor_manager, 1);
 	if (wlr_xcursor_manager_get_xcursor(seat->xcursor_manager,
 			LABWC_src_input_cursor_c_cursors_xdg[LAB_CURSOR_GRAB], 1)) {
@@ -7674,6 +7703,9 @@ static struct indicator_state {
 static const char *
 LABWC_src_input_key_state_c_keycode_to_keyname(struct xkb_keymap *keymap, uint32_t keycode)
 {
+	if (!keymap) {
+		return NULL;
+	}
 	const xkb_keysym_t *syms;
 	int syms_len = xkb_keymap_key_get_syms_by_level(keymap, keycode + 8, 0, 0, &syms);
 	if (!syms_len) {
@@ -7724,7 +7756,11 @@ LABWC_src_input_key_state_c_init_indicator(struct indicator_state *state)
 	wlr_scene_node_set_position(&state->sfb_modifiers->scene_buffer->node, 0, 60);
 	struct xkb_rule_names rules = { 0 };
 	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	state->keymap = xkb_map_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (context) {
+		state->keymap = xkb_map_new_from_names(context, &rules,
+			XKB_KEYMAP_COMPILE_NO_FLAGS);
+		xkb_context_unref(context);
+	}
 }
 static void
 LABWC_src_input_key_state_c_update_key_indicator_callback(void *data)
@@ -7747,7 +7783,7 @@ LABWC_src_input_key_state_c_update_key_indicator_callback(void *data)
 	for (int i = 0; i < LABWC_src_input_key_state_c_pressed.size; i++) {
 		const char *keyname = LABWC_src_input_key_state_c_keycode_to_keyname(LABWC_src_input_key_state_c_indicator_state.keymap,
 					LABWC_src_input_key_state_c_pressed.values[i]);
-		buf_add_fmt(&buf, "%s (%d), ", keyname, LABWC_src_input_key_state_c_pressed.values[i]);
+		buf_add_fmt(&buf, "%s (%d), ", keyname ? keyname : "?", LABWC_src_input_key_state_c_pressed.values[i]);
 	}
 	scaled_font_buffer_update(LABWC_src_input_key_state_c_indicator_state.sfb_pressed, buf.data,
 		-1, &rc.font_osd, black, white);
@@ -7756,7 +7792,7 @@ LABWC_src_input_key_state_c_update_key_indicator_callback(void *data)
 	for (int i = 0; i < LABWC_src_input_key_state_c_bound.size; i++) {
 		const char *keyname = LABWC_src_input_key_state_c_keycode_to_keyname(LABWC_src_input_key_state_c_indicator_state.keymap,
 					LABWC_src_input_key_state_c_bound.values[i]);
-		buf_add_fmt(&buf, "%s (%d), ", keyname, LABWC_src_input_key_state_c_bound.values[i]);
+		buf_add_fmt(&buf, "%s (%d), ", keyname ? keyname : "?", LABWC_src_input_key_state_c_bound.values[i]);
 	}
 	scaled_font_buffer_update(LABWC_src_input_key_state_c_indicator_state.sfb_bound, buf.data,
 		-1, &rc.font_osd, black, white);
@@ -7765,7 +7801,7 @@ LABWC_src_input_key_state_c_update_key_indicator_callback(void *data)
 	for (int i = 0; i < LABWC_src_input_key_state_c_pressed_sent.size; i++) {
 		const char *keyname = LABWC_src_input_key_state_c_keycode_to_keyname(LABWC_src_input_key_state_c_indicator_state.keymap,
 					LABWC_src_input_key_state_c_pressed_sent.values[i]);
-		buf_add_fmt(&buf, "%s (%d), ", keyname, LABWC_src_input_key_state_c_pressed_sent.values[i]);
+		buf_add_fmt(&buf, "%s (%d), ", keyname ? keyname : "?", LABWC_src_input_key_state_c_pressed_sent.values[i]);
 	}
 	scaled_font_buffer_update(LABWC_src_input_key_state_c_indicator_state.sfb_pressed_sent, buf.data, -1,
 		&rc.font_osd, black, white);
@@ -8335,6 +8371,9 @@ keyboard_group_init(struct seat *seat)
 		return;
 	}
 	seat->keyboard_group = wlr_keyboard_group_create();
+	if (!seat->keyboard_group) {
+		exit(EXIT_FAILURE);
+	}
 	keyboard_configure(seat, &seat->keyboard_group->keyboard,
 		  false);
 }
@@ -8870,7 +8909,9 @@ LABWC_src_main_c_send_signal_to_labwc_pid(int signal)
 		exit(EXIT_FAILURE);
 	}
 	int pid = atoi(labwc_pid);
-	if (!pid) {
+	/* A negative pid would signal a whole process group (kill(-1, ...)
+	 * signals every process we are allowed to signal). */
+	if (pid <= 0) {
 		exit(EXIT_FAILURE);
 	}
 	kill(pid, signal);
@@ -8958,10 +8999,15 @@ output_state_init(struct output *output)
 	wlr_output_state_init(&output->pending);
 	struct wlr_output_configuration_v1 *backup_config =
 		wlr_output_configuration_v1_create();
+	if (!backup_config) {
+		return;
+	}
 	struct wlr_output_configuration_head_v1 *backup_head =
 		wlr_output_configuration_head_v1_create(
 			backup_config, output->wlr_output);
-	wlr_output_head_v1_state_apply(&backup_head->state, &output->pending);
+	if (backup_head) {
+		wlr_output_head_v1_state_apply(&backup_head->state, &output->pending);
+	}
 	wlr_output_configuration_v1_destroy(backup_config);
 }
 bool
@@ -10772,9 +10818,15 @@ seat_init(void)
 	CONNECT_SIGNAL(&seat->wlr_seat->keyboard_state, seat, focus_change);
 	seat->virtual_pointer = wlr_virtual_pointer_manager_v1_create(
 		server.wl_display);
+	if (!seat->virtual_pointer) {
+		exit(EXIT_FAILURE);
+	}
 	CONNECT_SIGNAL(seat->virtual_pointer, seat, new_virtual_pointer);
 	seat->virtual_keyboard = wlr_virtual_keyboard_manager_v1_create(
 		server.wl_display);
+	if (!seat->virtual_keyboard) {
+		exit(EXIT_FAILURE);
+	}
 	CONNECT_SIGNAL(seat->virtual_keyboard, seat, new_virtual_keyboard);
 	seat->input_method_relay = input_method_relay_create(seat);
 	seat->xcursor_manager = NULL;
@@ -11379,6 +11431,7 @@ struct LABWC_src_session_lock_c_session_lock_output {
 	struct output *output;
 	struct wlr_session_lock_surface_v1 *surface;
 	struct wl_event_source *blank_timer;
+	struct wl_event_source *focus_idle;
 	struct wl_list link;
 	struct wl_listener destroy;
 	struct wl_listener commit;
@@ -11413,6 +11466,15 @@ static void
 LABWC_src_session_lock_c_update_focus(void *data)
 {
 	struct LABWC_src_session_lock_c_session_lock_output *output = data;
+	/* Idle sources are one-shot: libwayland frees them right after this
+	 * callback. Forget ours so the destroy paths don't remove it twice. */
+	output->focus_idle = NULL;
+	/* The surface or the whole lock output can go away between queueing
+	 * this callback and it running; both are cancelled on those paths,
+	 * but stay defensive. */
+	if (!output->surface) {
+		return;
+	}
 	cursor_update_focus();
 	if (!output->manager->focused) {
 		LABWC_src_session_lock_c_focus_surface(output->manager, output->surface->surface);
@@ -11423,7 +11485,10 @@ LABWC_src_session_lock_c_handle_surface_map(struct wl_listener *listener, void *
 {
 	struct LABWC_src_session_lock_c_session_lock_output *output =
 		wl_container_of(listener, output, surface_map);
-	wl_event_loop_add_idle(
+	if (output->focus_idle) {
+		wl_event_source_remove(output->focus_idle);
+	}
+	output->focus_idle = wl_event_loop_add_idle(
 		server.wl_event_loop, LABWC_src_session_lock_c_update_focus, output);
 }
 static void
@@ -11431,6 +11496,10 @@ LABWC_src_session_lock_c_handle_surface_destroy(struct wl_listener *listener, vo
 {
 	struct LABWC_src_session_lock_c_session_lock_output *output =
 		wl_container_of(listener, output, surface_destroy);
+	if (output->focus_idle) {
+		wl_event_source_remove(output->focus_idle);
+		output->focus_idle = NULL;
+	}
 	LABWC_src_session_lock_c_refocus_output(output);
 	assert(output->surface);
 	output->surface = NULL;
@@ -11496,6 +11565,10 @@ LABWC_src_session_lock_c_session_lock_output_destroy(struct LABWC_src_session_lo
 	wl_list_remove(&output->commit.link);
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
+	if (output->focus_idle) {
+		wl_event_source_remove(output->focus_idle);
+		output->focus_idle = NULL;
+	}
 	wl_event_source_remove(output->blank_timer);
 	free(output);
 }
@@ -13051,22 +13124,28 @@ LABWC_src_theme_c_load_button(struct theme *theme, struct LABWC_src_theme_c_butt
 		struct lab_img *non_hover_img =
 			button_imgs[b->type][b->state_set & ~LAB_BS_HOVERED];
 		*img = lab_img_copy(non_hover_img);
-		lab_img_add_modifier(*img, LABWC_src_theme_c_whiten_button);
-		lab_img_add_modifier(*img,
-			LABWC_src_theme_c_draw_hover_overlay_on_button);
+		if (*img) {
+			lab_img_add_modifier(*img, LABWC_src_theme_c_whiten_button);
+			lab_img_add_modifier(*img,
+				LABWC_src_theme_c_draw_hover_overlay_on_button);
+		}
 	}
 	struct lab_img **rounded_img =
 		&button_imgs[b->type][b->state_set | LAB_BS_ROUNDED];
 	if (rc.nr_title_buttons_left > 0
 			&& b->type == rc.title_buttons_left[0]) {
 		*rounded_img = lab_img_copy(*img);
-		lab_img_add_modifier(*rounded_img, LABWC_src_theme_c_round_left_corner_button);
+		if (*rounded_img) {
+			lab_img_add_modifier(*rounded_img, LABWC_src_theme_c_round_left_corner_button);
+		}
 	}
 	if (rc.nr_title_buttons_right > 0
 			&& b->type == rc.title_buttons_right
 				[rc.nr_title_buttons_right - 1]) {
 		*rounded_img = lab_img_copy(*img);
-		lab_img_add_modifier(*rounded_img, LABWC_src_theme_c_round_right_corner_button);
+		if (*rounded_img) {
+			lab_img_add_modifier(*rounded_img, LABWC_src_theme_c_round_right_corner_button);
+		}
 	}
 }
 static void
@@ -13578,6 +13657,7 @@ struct jtlabwc_control_client {
 	int fd;
 	struct wl_event_source *source;
 	size_t len;
+	bool discard_line;
 	char buf[JTLABWC_CONTROL_LINE_MAX];
 };
 static struct jtlabwc_control_color jtlabwc_close_color;
@@ -14121,7 +14201,22 @@ static void
 jtlabwc_control_process_buffer(struct jtlabwc_control_client *client)
 {
 	size_t start = 0;
-	for (size_t i = 0; i < client->len; i++) {
+	if (client->discard_line) {
+		/* An overlong line overflowed the buffer earlier. Skip bytes
+		 * until its terminating newline so the tail is never mistaken
+		 * for a complete command. */
+		while (start < client->len && client->buf[start] != '\n') {
+			start++;
+		}
+		if (start == client->len) {
+			client->len = 0;
+			client->buf[0] = '\0';
+			return;
+		}
+		start++;
+		client->discard_line = false;
+	}
+	for (size_t i = start; i < client->len; i++) {
 		if (client->buf[i] != '\n') {
 			continue;
 		}
@@ -14156,8 +14251,12 @@ jtlabwc_control_handle_client(int fd, uint32_t mask, void *data)
 	if (mask & WL_EVENT_READABLE) {
 		while (true) {
 			if (client->len >= sizeof(client->buf) - 1) {
+				/* The line no longer fits; discard it and everything
+				 * up to its newline instead of executing a truncated
+				 * tail as a command. */
 				client->len = 0;
 				client->buf[0] = '\0';
+				client->discard_line = true;
 			}
 			ssize_t n = read(fd, client->buf + client->len,
 				sizeof(client->buf) - client->len - 1);
@@ -15061,7 +15160,7 @@ LABWC_src_view_c_view_compute_cascaded_position(struct view *view, struct wlr_bo
 				LAB_VIEW_CRITERIA_CURRENT_WORKSPACE) {
 			struct wlr_box other = ssd_max_extents(other_view);
 			if (other_view == view
-					|| view->minimized
+					|| other_view->minimized
 					|| !box_intersects(&candidate, &other)) {
 				continue;
 			}
@@ -15884,7 +15983,26 @@ view_move_to_output(struct view *view, struct output *output)
 		LABWC_src_view_c_view_apply_tiled_geometry(view);
 	} else if (view->tiled_region) {
 		struct region *region = regions_from_name(view->tiled_region->name, output);
-		view_snap_to_region(view, region);
+		if (region) {
+			view_snap_to_region(view, region);
+		} else {
+			/* The target output has no region with that name. Keep the
+			 * view usable instead of passing NULL to the assert in
+			 * view_snap_to_region(). */
+			view_set_untiled(view);
+			view_apply_natural_geometry(view);
+		}
+	} else if (view->tiled_region_evacuate) {
+		/* The region was removed while it held this view. Try to re-attach
+		 * it on the new output; otherwise fall back to natural geometry. */
+		struct region *region =
+			regions_from_name(view->tiled_region_evacuate, output);
+		if (region) {
+			view_snap_to_region(view, region);
+		} else {
+			view_set_untiled(view);
+			view_apply_natural_geometry(view);
+		}
 	}
 }
 static void
@@ -19351,6 +19469,13 @@ menu_init(void)
 void
 menu_on_view_destroy(struct view *view)
 {
+	/* If the view that opened the current menu is going away, close the
+	 * menu. Otherwise a later item activation would run actions against
+	 * the freed view via menu->triggered_by_view. */
+	if (server.menu_current
+			&& server.menu_current->triggered_by_view == view) {
+		menu_close();
+	}
 	struct menu *menu = menu_get_by_id("client-list-combined-menu");
 	if (menu) {
 		struct menuitem *item;
@@ -20002,6 +20127,9 @@ void
 keybind_destroy(struct keybind *keybind)
 {
 	assert(wl_list_empty(&keybind->actions));
+	/* keybind_create() links every keybind into rc.keybinds. Unlink before
+	 * freeing so error paths don't leave a dangling list entry behind. */
+	wl_list_remove(&keybind->link);
 	zfree(keybind->keysyms);
 	zfree(keybind);
 }
