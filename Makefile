@@ -117,8 +117,8 @@ install: jtlabwc jtlabwcctl
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/jtlabwc
 	cp -f jtlabwcctl $(DESTDIR)$(PREFIX)/bin
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/jtlabwcctl
-	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
-	cp -f data/jtlabwc.desktop $(DESTDIR)$(DATADIR)/wayland-sessions
+	mkdir -p $(DESTDIR)$(SESSIONDIR)
+	cp -f data/jtlabwc.desktop $(DESTDIR)$(SESSIONDIR)/jtlabwc.desktop
 	mkdir -p $(DESTDIR)$(DATADIR)/xdg-desktop-portal
 	cp -f data/labwc-portals.conf $(DESTDIR)$(DATADIR)/xdg-desktop-portal
 	mkdir -p $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps
@@ -130,7 +130,7 @@ install: jtlabwc jtlabwcctl
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/jtlabwc
 	rm -f $(DESTDIR)$(PREFIX)/bin/jtlabwcctl
-	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/jtlabwc.desktop
+	rm -f $(DESTDIR)$(SESSIONDIR)/jtlabwc.desktop
 	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/labwc-portals.conf
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/jtlabwc.svg
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/jtlabwc-symbolic.svg

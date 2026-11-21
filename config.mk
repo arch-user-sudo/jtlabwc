@@ -35,3 +35,6 @@ export PKG_CONFIG_PATH
 PREFIX ?= /usr/local
 MANDIR ?= $(PREFIX)/share/man
 DATADIR ?= $(PREFIX)/share
+# Login managers scan /usr/share/wayland-sessions for available sessions,
+# so the session entry goes there regardless of PREFIX/DATADIR.
+SESSIONDIR ?= /usr/share/wayland-sessions
