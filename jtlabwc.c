@@ -333,8 +333,6 @@ struct rcxml {
 	long doubleclick_time;
 	struct wl_list mousebinds;
 	struct wl_list libinput_categories;
-	int screen_edge_strength;
-	int window_edge_strength;
 	int unsnap_threshold;
 	int unmaximize_threshold;
 	int snap_edge_range_inner;
@@ -1028,7 +1026,6 @@ struct view {
 	enum view_layer layer;
 	bool visible_on_all_workspaces;
 	enum lab_edge tiled;
-	enum lab_edge edges_visible;
 	bool inhibits_keybinds;
 	xkb_layout_index_t keyboard_layout;
 	struct region *tiled_region;
@@ -1170,7 +1167,7 @@ void view_set_decorations(struct view *view, enum lab_ssd_mode mode, bool force_
 void view_toggle_fullscreen(struct view *view);
 void view_save_last_placement(struct view *view);
 void view_adjust_for_layout_change(struct view *view);
-void view_move_to_edge(struct view *view, enum lab_edge direction, bool snap_to_windows);
+void view_move_to_edge(struct view *view, enum lab_edge direction);
 void view_grow_to_edge(struct view *view, enum lab_edge direction);
 void view_shrink_to_edge(struct view *view, enum lab_edge direction);
 void view_snap_to_edge(struct view *view, enum lab_edge direction,
@@ -1459,57 +1456,6 @@ struct output;
 struct server;
 struct view;
 struct wlr_box;
-static inline int
-clipped_add(int a, int b)
-{
-	if (b > 0) {
-		return a >= (INT_MAX - b) ? INT_MAX : (a + b);
-	} else if (b < 0) {
-		return a <= (INT_MIN - b) ? INT_MIN : (a + b);
-	}
-	return a;
-}
-static inline int
-clipped_sub(int a, int b)
-{
-	if (b > 0) {
-		return a <= (INT_MIN + b) ? INT_MIN : (a - b);
-	} else if (b < 0) {
-		return a >= (INT_MAX + b) ? INT_MAX : (a - b);
-	}
-	return a;
-}
-static inline int
-edge_get_best(int next, int edge, bool decreasing)
-{
-	if (!BOUNDED_INT(next)) {
-		return BOUNDED_INT(edge) ? edge : next;
-	}
-	if (!BOUNDED_INT(edge)) {
-		return next;
-	}
-	return decreasing ? MAX(next, edge) : MIN(next, edge);
-}
-struct edge {
-	int offset;
-	int min;
-	int max;
-};
-typedef void (*edge_validator_t)(int *best, struct edge current,
-	struct edge target, struct edge oppose, struct edge align, bool lesser);
-void edges_initialize(struct border *edges);
-void edges_find_neighbors(struct border *nearest_edges, struct view *view,
-	struct wlr_box origin, struct wlr_box target,
-	struct output *output, edge_validator_t validator, bool ignore_hidden);
-void edges_find_outputs(struct border *nearest_edges, struct view *view,
-	struct wlr_box origin, struct wlr_box target,
-	struct output *output, edge_validator_t validator);
-void edges_adjust_move_coords(struct view *view, struct border edges,
-	int *x, int *y, bool use_pending);
-void edges_adjust_resize_geom(struct view *view, struct border edges,
-	enum lab_edge resize_edges, struct wlr_box *geom, bool use_pending);
-bool edges_traverse_edge(struct edge current, struct edge target, struct edge edge);
-void edges_calculate_visibility(struct view *ignored_view);
 struct wl_display;
 struct wlr_seat;
 enum mouse_event {
@@ -1547,8 +1493,6 @@ void gestures_init(struct seat *seat);
 void gestures_finish(struct seat *seat);
 struct view;
 bool resistance_unsnap_apply(struct view *view, int *x, int *y);
-void resistance_move_apply(struct view *view, int *x, int *y);
-void resistance_resize_apply(struct view *view, struct wlr_box *new_view_geo);
 struct view;
 void resize_outlines_update(struct view *view, struct wlr_box new_geo);
 void resize_outlines_finish(struct view *view);
@@ -1703,12 +1647,6 @@ void resize_indicator_update(struct view *view);
 void resize_indicator_hide(struct view *view);
 struct view;
 struct wlr_box;
-void snap_constraints_set(struct view *view, enum lab_edge direction,
-	struct wlr_box geom);
-void snap_constraints_invalidate(struct view *view);
-void snap_constraints_update(struct view *view);
-struct wlr_box snap_constraints_effective(struct view *view,
-	enum lab_edge direction, bool use_pending);
 enum lab_libinput_device_type {
 	LAB_LIBINPUT_DEVICE_NONE = 0,
 	LAB_LIBINPUT_DEVICE_DEFAULT,
@@ -1763,7 +1701,7 @@ void xdg_server_decoration_finish(void);
 struct view;
 struct wlr_box;
 void snap_move_to_edge(struct view *view,
-	enum lab_edge direction, bool snap_to_windows, int *dx, int *dy);
+	enum lab_edge direction, int *dx, int *dy);
 void snap_grow_to_next_edge(struct view *view,
 	enum lab_edge direction, struct wlr_box *geo);
 void snap_shrink_to_next_edge(struct view *view,
@@ -2586,11 +2524,6 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 			}
 			goto cleanup;
 		}
-		if (action->type == ACTION_TYPE_MOVE_TO_EDGE
-				&& !strcasecmp(argument, "snapWindows")) {
-			LABWC_src_action_c_action_arg_add_bool(action, argument, parse_bool(content, true));
-			goto cleanup;
-		}
 		if ((action->type == ACTION_TYPE_SNAP_TO_EDGE
 					|| action->type == ACTION_TYPE_TOGGLE_SNAP_TO_EDGE)
 				&& !strcasecmp(argument, "combine")) {
@@ -3106,8 +3039,7 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 	case ACTION_TYPE_MOVE_TO_EDGE:
 		if (view) {
 			enum lab_edge edge = LABWC_src_action_c_action_get_int(action, "direction", 0);
-			bool snap_to_windows = LABWC_src_action_c_action_get_bool(action, "snapWindows", true);
-			view_move_to_edge(view, edge, snap_to_windows);
+			view_move_to_edge(view, edge);
 		}
 		break;
 	case ACTION_TYPE_TOGGLE_SNAP_TO_EDGE:
@@ -5584,418 +5516,6 @@ void dnd_finish(struct seat *seat)
 	wl_list_remove(&seat->drag.events.request.link);
 	wl_list_remove(&seat->drag.events.start.link);
 }
-static void
-LABWC_src_edges_c_edges_for_target_geometry(struct border *edges, struct view *view,
-		struct wlr_box target)
-{
-	struct border border = ssd_get_margin(view->ssd);
-	int eff_height = target.height;
-	edges->left = target.x - border.left - rc.gap;
-	edges->top = target.y - border.top - rc.gap;
-	edges->right = target.x + target.width + border.right + rc.gap;
-	edges->bottom = target.y + eff_height + border.bottom + rc.gap;
-}
-void
-edges_initialize(struct border *edges)
-{
-	assert(edges);
-	edges->top = INT_MIN;
-	edges->right = INT_MAX;
-	edges->bottom = INT_MAX;
-	edges->left = INT_MIN;
-}
-static inline struct edge
-LABWC_src_edges_c_build_edge(struct border region, enum lab_edge direction, int pad)
-{
-	struct edge edge = { 0 };
-	switch (direction) {
-	case LAB_EDGE_LEFT:
-		edge.offset = clipped_sub(region.left, pad);
-		edge.min = region.top;
-		edge.max = region.bottom;
-		break;
-	case LAB_EDGE_RIGHT:
-		edge.offset = clipped_add(region.right, pad);
-		edge.min = region.top;
-		edge.max = region.bottom;
-		break;
-	case LAB_EDGE_TOP:
-		edge.offset = clipped_sub(region.top, pad);
-		edge.min = region.left;
-		edge.max = region.right;
-		break;
-	case LAB_EDGE_BOTTOM:
-		edge.offset = clipped_add(region.bottom, pad);
-		edge.min = region.left;
-		edge.max = region.right;
-		break;
-	default:
-		abort();
-	}
-	return edge;
-}
-static inline bool
-LABWC_src_edges_c_is_lesser(enum lab_edge direction)
-{
-	return direction == LAB_EDGE_LEFT || direction == LAB_EDGE_TOP;
-}
-static inline struct edge
-LABWC_src_edges_c_build_visible_edge(struct border region, enum lab_edge direction,
-		int pad, enum lab_edge edges_visible)
-{
-	struct edge edge = LABWC_src_edges_c_build_edge(region, direction, pad);
-	if (!(edges_visible & direction)) {
-		edge.offset = LABWC_src_edges_c_is_lesser(direction) ? INT_MIN : INT_MAX;
-	}
-	return edge;
-}
-static void
-LABWC_src_edges_c_validate_single_region_edge(int *valid_edge,
-		struct border view, struct border target,
-		struct border region, edge_validator_t validator,
-		enum lab_edge direction, enum lab_edge edges_visible)
-{
-	enum lab_edge opposing = lab_edge_invert(direction);
-	assert(opposing != LAB_EDGE_NONE);
-	validator(valid_edge,
-		LABWC_src_edges_c_build_edge(view, direction, 0),
-		LABWC_src_edges_c_build_edge(target, direction, 0),
-		LABWC_src_edges_c_build_visible_edge(region, opposing, 0, edges_visible),
-		LABWC_src_edges_c_build_visible_edge(region, direction, rc.gap, edges_visible),
-		LABWC_src_edges_c_is_lesser(direction));
-}
-static void
-LABWC_src_edges_c_validate_edges(struct border *valid_edges,
-		struct border view, struct border target,
-		struct border region, enum lab_edge edges_visible,
-		edge_validator_t validator)
-{
-	LABWC_src_edges_c_validate_single_region_edge(&valid_edges->left,
-		view, target, region, validator, LAB_EDGE_LEFT, edges_visible);
-	LABWC_src_edges_c_validate_single_region_edge(&valid_edges->right,
-		view, target, region, validator, LAB_EDGE_RIGHT, edges_visible);
-	LABWC_src_edges_c_validate_single_region_edge(&valid_edges->top,
-		view, target, region, validator, LAB_EDGE_TOP, edges_visible);
-	LABWC_src_edges_c_validate_single_region_edge(&valid_edges->bottom,
-		view, target, region, validator, LAB_EDGE_BOTTOM, edges_visible);
-}
-static void
-LABWC_src_edges_c_validate_single_output_edge(int *valid_edge,
-		struct border view, struct border target,
-		struct border region, edge_validator_t validator,
-		enum lab_edge direction)
-{
-	static struct border unbounded = {
-		.top = INT_MIN,
-		.right = INT_MAX,
-		.bottom = INT_MAX,
-		.left = INT_MIN,
-	};
-	validator(valid_edge,
-		LABWC_src_edges_c_build_edge(view, direction, 0),
-		LABWC_src_edges_c_build_edge(target, direction, 0),
-		LABWC_src_edges_c_build_edge(region, direction, 0),
-		LABWC_src_edges_c_build_edge(unbounded, direction, 0), LABWC_src_edges_c_is_lesser(direction));
-}
-static void
-LABWC_src_edges_c_validate_output_edges(struct border *valid_edges,
-		struct border view, struct border target,
-		struct wlr_box usable, edge_validator_t validator)
-{
-	struct border output = {
-		.top = usable.y,
-		.right = usable.x + usable.width,
-		.bottom = usable.y + usable.height,
-		.left = usable.x,
-	};
-	LABWC_src_edges_c_validate_single_output_edge(&valid_edges->left,
-		view, target, output, validator, LAB_EDGE_LEFT);
-	LABWC_src_edges_c_validate_single_output_edge(&valid_edges->right,
-		view, target, output, validator, LAB_EDGE_RIGHT);
-	LABWC_src_edges_c_validate_single_output_edge(&valid_edges->top,
-		view, target, output, validator, LAB_EDGE_TOP);
-	LABWC_src_edges_c_validate_single_output_edge(&valid_edges->bottom,
-		view, target, output, validator, LAB_EDGE_BOTTOM);
-}
-static enum lab_edge
-LABWC_src_edges_c_compute_edges_visible(const struct wlr_box *view_size,
-		const pixman_box32_t *view_rect,
-		const pixman_region32_t *available)
-{
-	pixman_region32_t intersection;
-	pixman_region32_init(&intersection);
-	pixman_region32_intersect_rect(&intersection, available,
-		view_size->x, view_size->y,
-		(unsigned int)view_size->width,
-		(unsigned int)view_size->height);
-	int nrects;
-	const pixman_box32_t *rects =
-		pixman_region32_rectangles(&intersection, &nrects);
-	enum lab_edge edges_visible = LAB_EDGE_NONE;
-	for (int i = 0; i < nrects; i++) {
-		if (rects[i].x1 == view_rect->x1) {
-			edges_visible |= LAB_EDGE_LEFT;
-		}
-		if (rects[i].y1 == view_rect->y1) {
-			edges_visible |= LAB_EDGE_TOP;
-		}
-		if (rects[i].x2 == view_rect->x2) {
-			edges_visible |= LAB_EDGE_RIGHT;
-		}
-		if (rects[i].y2 == view_rect->y2) {
-			edges_visible |= LAB_EDGE_BOTTOM;
-		}
-	}
-	pixman_region32_fini(&intersection);
-	return edges_visible;
-}
-static void
-LABWC_src_edges_c_subtract_view_from_space(struct view *view, pixman_region32_t *available)
-{
-	struct wlr_box view_size = ssd_max_extents(view);
-	pixman_box32_t view_rect = {
-		.x1 = view_size.x,
-		.y1 = view_size.y,
-		.x2 = view_size.x + view_size.width,
-		.y2 = view_size.y + view_size.height
-	};
-	pixman_region_overlap_t overlap =
-		pixman_region32_contains_rectangle(available, &view_rect);
-	switch (overlap) {
-	case PIXMAN_REGION_IN:
-		view->edges_visible = LAB_EDGES_ALL;
-		break;
-	case PIXMAN_REGION_OUT:
-		view->edges_visible = LAB_EDGE_NONE;
-		return;
-	case PIXMAN_REGION_PART:
-		view->edges_visible = LABWC_src_edges_c_compute_edges_visible(
-			&view_size, &view_rect, available);
-		break;
-	}
-	pixman_region32_t view_region;
-	pixman_region32_init_rects(&view_region, &view_rect, 1);
-	pixman_region32_subtract(available, available, &view_region);
-	pixman_region32_fini(&view_region);
-}
-static void
-LABWC_src_edges_c_subtract_node_tree(struct wlr_scene_tree *tree, pixman_region32_t *available,
-		struct view *ignored_view)
-{
-	struct view *view;
-	struct wlr_scene_node *node;
-	struct node_descriptor *node_desc;
-	wl_list_for_each_reverse(node, &tree->children, link) {
-		if (!node->enabled) {
-			continue;
-		}
-		node_desc = node->data;
-		if (node_desc && node_desc->type == LAB_NODE_VIEW) {
-			view = node_view_from_node(node);
-			if (view != ignored_view) {
-				LABWC_src_edges_c_subtract_view_from_space(view, available);
-			}
-		} else if (node->type == WLR_SCENE_NODE_TREE) {
-			LABWC_src_edges_c_subtract_node_tree(wlr_scene_tree_from_node(node),
-				available, ignored_view);
-		}
-	}
-}
-void
-edges_calculate_visibility(struct view *ignored_view)
-{
-	pixman_region32_t region;
-	pixman_region32_init(&region);
-	struct output *output;
-	struct wlr_box layout_box;
-	wl_list_for_each(output, &server.outputs, link) {
-		if (!output_is_usable(output)) {
-			continue;
-		}
-		wlr_output_layout_get_box(server.output_layout,
-			output->wlr_output, &layout_box);
-		pixman_region32_union_rect(&region, &region,
-			layout_box.x, layout_box.y,
-			(unsigned int)layout_box.width,
-			(unsigned int)layout_box.height);
-	}
-	LABWC_src_edges_c_subtract_node_tree(&server.scene->tree, &region, ignored_view);
-	pixman_region32_fini(&region);
-}
-void
-edges_find_neighbors(struct border *nearest_edges, struct view *view,
-		struct wlr_box origin, struct wlr_box target,
-		struct output *output, edge_validator_t validator, bool ignore_hidden)
-{
-	assert(view);
-	assert(validator);
-	assert(nearest_edges);
-	if (!output_is_usable(view->output)) {
-		return;
-	}
-	struct border view_edges = { 0 };
-	struct border target_edges = { 0 };
-	LABWC_src_edges_c_edges_for_target_geometry(&view_edges, view, origin);
-	LABWC_src_edges_c_edges_for_target_geometry(&target_edges, view, target);
-	struct view *v;
-	for_each_view(v, &server.views, LAB_VIEW_CRITERIA_CURRENT_WORKSPACE) {
-		if (v == view || v->minimized || !output_is_usable(v->output)) {
-			continue;
-		}
-		enum lab_edge edges_visible =
-			ignore_hidden ? v->edges_visible : LAB_EDGES_ALL;
-		if (edges_visible == LAB_EDGE_NONE) {
-			continue;
-		}
-		if (output && output != v->output && !view_on_output(v, output)) {
-			continue;
-		}
-		if (view->output != v->output && !(view->outputs & v->outputs)) {
-			continue;
-		}
-		struct border border = ssd_get_margin(v->ssd);
-		struct border win_edges = {
-			.top = v->current.y - border.top,
-			.right = v->current.x + v->current.width + border.right,
-			.bottom = v->current.y + border.bottom
-				+ view_effective_height(v,   false),
-			.left = v->current.x - border.left,
-		};
-		LABWC_src_edges_c_validate_edges(nearest_edges, view_edges,
-			target_edges, win_edges, edges_visible, validator);
-	}
-}
-void
-edges_find_outputs(struct border *nearest_edges, struct view *view,
-		struct wlr_box origin, struct wlr_box target,
-		struct output *output, edge_validator_t validator)
-{
-	assert(view);
-	assert(validator);
-	assert(nearest_edges);
-	if (!output_is_usable(view->output)) {
-		return;
-	}
-	struct border view_edges = { 0 };
-	struct border target_edges = { 0 };
-	LABWC_src_edges_c_edges_for_target_geometry(&view_edges, view, origin);
-	LABWC_src_edges_c_edges_for_target_geometry(&target_edges, view, target);
-	struct output *o;
-	wl_list_for_each(o, &server.outputs, link) {
-		if (!output_is_usable(o)) {
-			continue;
-		}
-		if (output && o != output) {
-			continue;
-		}
-		struct wlr_box usable =
-			output_usable_area_in_layout_coords(o);
-		if (!box_intersects(&origin, &usable)
-				&& !box_intersects(&target, &usable)) {
-			continue;
-		}
-		LABWC_src_edges_c_validate_output_edges(nearest_edges,
-			view_edges, target_edges, usable, validator);
-	}
-}
-static void
-LABWC_src_edges_c_adjust_move_coords_1d(int *edge, int lesser, int lesser_offset,
-		int greater, int greater_offset, bool decreasing)
-{
-	int best = INT_MAX;
-	if (BOUNDED_INT(lesser)) {
-		best = clipped_add(lesser, lesser_offset);
-	}
-	if (BOUNDED_INT(greater)) {
-		best = edge_get_best(best,
-			clipped_sub(greater, greater_offset), decreasing);
-	}
-	if (BOUNDED_INT(best)) {
-		*edge = best;
-	}
-}
-void
-edges_adjust_move_coords(struct view *view, struct border edges,
-		int *x, int *y, bool use_pending)
-{
-	assert(view);
-	struct border border = ssd_get_margin(view->ssd);
-	struct wlr_box *view_geom =
-		use_pending ? &view->pending : &view->current;
-	if (view_geom->x != *x) {
-		int lshift = border.left + rc.gap;
-		int rshift = border.right + rc.gap + view_geom->width;
-		LABWC_src_edges_c_adjust_move_coords_1d(x, edges.left, lshift,
-			edges.right, rshift, *x < view_geom->x);
-	}
-	if (view_geom->y != *y) {
-		int tshift = border.top + rc.gap;
-		int bshift = border.bottom + rc.gap
-			+ view_effective_height(view, use_pending);
-		LABWC_src_edges_c_adjust_move_coords_1d(y, edges.top, tshift,
-			edges.bottom, bshift, *y < view_geom->y);
-	}
-}
-void
-edges_adjust_resize_geom(struct view *view, struct border edges,
-		enum lab_edge resize_edges, struct wlr_box *geom,
-		bool use_pending)
-{
-	assert(view);
-	struct border border = ssd_get_margin(view->ssd);
-	struct wlr_box *view_geom =
-		use_pending ? &view->pending : &view->current;
-	if (resize_edges & LAB_EDGE_LEFT) {
-		if (BOUNDED_INT(edges.left)) {
-			geom->x = edges.left + border.left + rc.gap;
-			geom->width = view_geom->width + view_geom->x - geom->x;
-		}
-	} else if (resize_edges & LAB_EDGE_RIGHT) {
-		if (BOUNDED_INT(edges.right)) {
-			geom->width = edges.right
-				- view_geom->x - border.right - rc.gap;
-		}
-	}
-	if (resize_edges & LAB_EDGE_TOP) {
-		if (BOUNDED_INT(edges.top)) {
-			geom->y = edges.top + border.top + rc.gap;
-			geom->height = view_geom->height + view_geom->y - geom->y;
-		}
-	} else if (resize_edges & LAB_EDGE_BOTTOM) {
-		if (BOUNDED_INT(edges.bottom)) {
-			geom->height = edges.bottom
-				- view_geom->y - border.bottom - rc.gap;
-		}
-	}
-}
-static double
-LABWC_src_edges_c_linear_interp(int x, int x1, int y1, int x2, int y2)
-{
-	int rise = y2 - y1;
-	if (rise == 0) {
-		return y2;
-	}
-	int run = x2 - x1;
-	if (run == 0) {
-		return 0.5 * (y1 + y2);
-	}
-	int dx = x - x1;
-	return y1 + dx * (rise / (double)run);
-}
-bool
-edges_traverse_edge(struct edge current, struct edge target, struct edge obstacle)
-{
-	double lo =
-		LABWC_src_edges_c_linear_interp(obstacle.offset,
-			current.offset, current.min, target.offset, target.min);
-	if (obstacle.max <= lo) {
-		return false;
-	}
-	double hi =
-		LABWC_src_edges_c_linear_interp(obstacle.offset,
-			current.offset, current.max, target.offset, target.max);
-	return obstacle.min < hi;
-}
 #define handle_axis LABWC_src_input_cursor_c_handle_axis
 #define handle_button LABWC_src_input_cursor_c_handle_button
 #define handle_frame LABWC_src_input_cursor_c_handle_frame
@@ -6175,7 +5695,6 @@ LABWC_src_input_cursor_c_process_cursor_move(uint32_t time)
 		x = new_geo.x;
 		y = new_geo.y;
 	}
-	resistance_move_apply(view, &x, &y);
 	view_move(view, x, y);
 	overlay_update(&server.seat);
 }
@@ -6215,7 +5734,6 @@ LABWC_src_input_cursor_c_process_cursor_resize(uint32_t time)
 	} else if (server.resize_edges & LAB_EDGE_RIGHT) {
 		new_view_geo.width = (int)(server.grab_box.width + dx);
 	}
-	resistance_resize_apply(view, &new_view_geo);
 	view_adjust_size(view, &new_view_geo.width, &new_view_geo.height);
 	if (server.resize_edges & LAB_EDGE_TOP) {
 		new_view_geo.y = server.grab_box.y +
@@ -10325,48 +9843,6 @@ resize_outlines_finish(struct view *view)
 	wlr_scene_node_set_enabled(
 		&view->resize_outlines.rect->tree->node, false);
 }
-static void
-LABWC_src_resistance_c_check_edge(int *next, struct edge current, struct edge target,
-		struct edge oppose, struct edge align, int tolerance, bool lesser)
-{
-	int cur = current.offset;
-	int tgt = target.offset;
-	int opp = oppose.offset;
-	if (cur == tgt) {
-		return;
-	}
-	const bool decreasing = tgt < cur;
-	if (tolerance >= 0 && lesser != decreasing) {
-		return;
-	}
-	bool valid = false;
-	if (decreasing) {
-		const int lo = clipped_sub(opp, abs(tolerance));
-		const int hi = clipped_sub(opp, MIN(tolerance, 0));
-		valid = tgt >= lo && tgt < hi && cur >= opp;
-	} else {
-		const int lo = clipped_add(opp, MIN(tolerance, 0));
-		const int hi = clipped_add(opp, abs(tolerance));
-		valid = tgt > lo && tgt <= hi && cur <= opp;
-	}
-	if (valid && edges_traverse_edge(current, target, oppose)) {
-		*next = edge_get_best(*next, opp, decreasing);
-	}
-}
-static void
-LABWC_src_resistance_c_check_edge_output(int *next, struct edge current, struct edge target,
-		struct edge oppose, struct edge align, bool lesser)
-{
-	LABWC_src_resistance_c_check_edge(next, current, target,
-		oppose, align, rc.screen_edge_strength, lesser);
-}
-static void
-LABWC_src_resistance_c_check_edge_window(int *next, struct edge current, struct edge target,
-		struct edge oppose, struct edge align, bool lesser)
-{
-	LABWC_src_resistance_c_check_edge(next, current, target,
-		oppose, align, rc.window_edge_strength, lesser);
-}
 bool
 resistance_unsnap_apply(struct view *view, int *x, int *y)
 {
@@ -10393,52 +9869,6 @@ resistance_unsnap_apply(struct view *view, int *x, int *y)
 		}
 	}
 	return true;
-}
-void
-resistance_move_apply(struct view *view, int *x, int *y)
-{
-	assert(view);
-	struct border next_edges;
-	edges_initialize(&next_edges);
-	struct wlr_box target = {
-		.x = *x,
-		.y = *y,
-		.width = view->current.width,
-		.height = view->current.height,
-	};
-	if (rc.screen_edge_strength != 0) {
-		edges_find_outputs(&next_edges, view,
-			view->current, target, NULL, LABWC_src_resistance_c_check_edge_output);
-	}
-	if (rc.window_edge_strength != 0) {
-		edges_find_neighbors(&next_edges, view, view->current, target,
-			NULL, LABWC_src_resistance_c_check_edge_window,   true);
-	}
-	edges_adjust_move_coords(view, next_edges,
-		&target.x, &target.y,   false);
-	*x = target.x;
-	*y = target.y;
-}
-void
-resistance_resize_apply(struct view *view, struct wlr_box *new_geom)
-{
-	assert(view);
-	struct border next_edges;
-	edges_initialize(&next_edges);
-	enum lab_edge resize_edges = server.resize_edges;
-	struct wlr_box origin =
-		snap_constraints_effective(view, resize_edges,   false);
-	if (rc.screen_edge_strength != 0) {
-		edges_find_outputs(&next_edges, view,
-			origin, *new_geom, NULL, LABWC_src_resistance_c_check_edge_output);
-	}
-	if (rc.window_edge_strength != 0) {
-		edges_find_neighbors(&next_edges, view, origin, *new_geom,
-			NULL, LABWC_src_resistance_c_check_edge_window,   true);
-	}
-	edges_adjust_resize_geom(view, next_edges,
-		resize_edges, new_geom,   false);
-	snap_constraints_set(view, resize_edges, *new_geom);
 }
 #define handle_focus_change LABWC_src_seat_c_handle_focus_change
 #define handle_new_input LABWC_src_seat_c_handle_new_input
@@ -11801,151 +11231,9 @@ show_desktop_reset(void)
 		view->was_minimized_by_show_desktop_action = false;
 	}
 }
-static struct {
-	struct view *view;
-	bool pending;
-	int vertical_offset;
-	int horizontal_offset;
-	enum lab_edge resize_edges;
-	struct wlr_box geom;
-} last_snap_hit;
-static void
-LABWC_src_snap_constraints_c_snap_constraints_reset(void)
-{
-	last_snap_hit.view = NULL;
-	last_snap_hit.pending = false;
-	last_snap_hit.horizontal_offset = INT_MIN;
-	last_snap_hit.vertical_offset = INT_MIN;
-	last_snap_hit.resize_edges = LAB_EDGE_NONE;
-	memset(&last_snap_hit.geom, 0, sizeof(last_snap_hit.geom));
-}
-static bool
-LABWC_src_snap_constraints_c_snap_constraints_are_valid(struct view *view, enum lab_edge resize_edges)
-{
-	assert(view);
-	if (view != last_snap_hit.view) {
-		return false;
-	}
-	if (resize_edges != last_snap_hit.resize_edges) {
-		return false;
-	}
-	if (resize_edges & LAB_EDGES_LEFT_RIGHT) {
-		if (!BOUNDED_INT(last_snap_hit.horizontal_offset)) {
-			return false;
-		}
-		if ((resize_edges & LAB_EDGE_LEFT) && (resize_edges & LAB_EDGE_RIGHT)) {
-			return false;
-		}
-	} else if (resize_edges & LAB_EDGES_TOP_BOTTOM) {
-		if (!BOUNDED_INT(last_snap_hit.vertical_offset)) {
-			return false;
-		}
-		if ((resize_edges & LAB_EDGE_TOP) && (resize_edges & LAB_EDGE_BOTTOM)) {
-			return false;
-		}
-	} else {
-		return false;
-	}
-	return wlr_box_equal(&view->pending, &last_snap_hit.geom);
-}
-void
-snap_constraints_set(struct view *view, enum lab_edge resize_edges,
-		struct wlr_box geom)
-{
-	assert(view);
-	last_snap_hit.horizontal_offset = INT_MIN;
-	if (resize_edges & LAB_EDGE_LEFT) {
-		last_snap_hit.horizontal_offset = geom.x;
-	} else if (resize_edges & LAB_EDGE_RIGHT) {
-		last_snap_hit.horizontal_offset = geom.x + geom.width;
-	}
-	last_snap_hit.vertical_offset = INT_MIN;
-	if (resize_edges & LAB_EDGE_TOP) {
-		last_snap_hit.vertical_offset = geom.y;
-	} else if (resize_edges & LAB_EDGE_BOTTOM) {
-		last_snap_hit.vertical_offset = geom.y + geom.height;
-	}
-	last_snap_hit.view = view;
-	last_snap_hit.resize_edges = resize_edges;
-	last_snap_hit.geom = geom;
-	last_snap_hit.pending = true;
-}
-void
-snap_constraints_invalidate(struct view *view)
-{
-	if (view == last_snap_hit.view) {
-		LABWC_src_snap_constraints_c_snap_constraints_reset();
-	}
-}
-void
-snap_constraints_update(struct view *view)
-{
-	assert(view);
-	if (view != last_snap_hit.view) {
-		return;
-	}
-	if (!last_snap_hit.pending) {
-		return;
-	}
-	if (view->pending.width != last_snap_hit.geom.width) {
-		return;
-	}
-	if (view->pending.height != last_snap_hit.geom.height) {
-		return;
-	}
-	last_snap_hit.geom = view->current;
-	last_snap_hit.pending = false;
-}
-struct wlr_box
-snap_constraints_effective(struct view *view, enum lab_edge resize_edges,
-		bool use_pending)
-{
-	assert(view);
-	struct wlr_box real_geom = use_pending ? view->pending : view->current;
-	if (!LABWC_src_snap_constraints_c_snap_constraints_are_valid(view, resize_edges)) {
-		return real_geom;
-	}
-	struct wlr_box geom = real_geom;
-	if (resize_edges & LAB_EDGE_LEFT) {
-		geom.x = last_snap_hit.horizontal_offset;
-	} else if (resize_edges & LAB_EDGE_RIGHT) {
-		geom.width = last_snap_hit.horizontal_offset - geom.x;
-	}
-	if (resize_edges & LAB_EDGE_TOP) {
-		geom.y = last_snap_hit.vertical_offset;
-	} else if (resize_edges & LAB_EDGE_BOTTOM) {
-		geom.height = last_snap_hit.vertical_offset - geom.y;
-	}
-	if (!BOUNDED_INT(geom.x) || !BOUNDED_INT(geom.y)) {
-		return real_geom;
-	}
-	if (geom.width <= 0 || geom.height <= 0) {
-		return real_geom;
-	}
-	return geom;
-}
-static void
-LABWC_src_snap_c_check_edge(int *next, struct edge current, struct edge target,
-		struct edge oppose, struct edge align, bool lesser)
-{
-	int cur = current.offset;
-	int tgt = target.offset;
-	int opp = oppose.offset;
-	int aln = align.offset;
-	if (cur == tgt) {
-		return;
-	}
-	const bool decreasing = tgt < cur;
-	if ((tgt <= opp && opp < cur) || (cur < opp && opp <= tgt)) {
-		*next = edge_get_best(*next, opp, decreasing);
-	}
-	if ((tgt <= aln && aln < cur) || (cur < aln && aln <= tgt)) {
-		*next = edge_get_best(*next, aln, decreasing);
-	}
-}
 void
 snap_move_to_edge(struct view *view, enum lab_edge direction,
-		bool snap_to_windows, int *dx, int *dy)
+		int *dx, int *dy)
 {
 	assert(view);
 	*dx = 0;
@@ -11987,14 +11275,6 @@ snap_move_to_edge(struct view *view, enum lab_edge direction,
 	default:
 		return;
 	}
-	if (snap_to_windows) {
-		struct border next_edges;
-		edges_initialize(&next_edges);
-		edges_find_neighbors(&next_edges, view, view->pending, target,
-			output, LABWC_src_snap_c_check_edge,   false);
-		edges_adjust_move_coords(view, next_edges,
-			&target.x, &target.y,   true);
-	}
 	*dx = target.x - view->pending.x;
 	*dy = target.y - view->pending.y;
 }
@@ -12010,27 +11290,22 @@ snap_grow_to_next_edge(struct view *view,
 	}
 	struct border ssd = ssd_thickness(view);
 	struct wlr_box usable = output_usable_area_in_layout_coords(output);
-	enum lab_edge resize_edges;
 	switch (direction) {
 	case LAB_EDGE_LEFT:
 		geo->x = usable.x + ssd.left + rc.gap;
 		geo->width = view->pending.x + view->pending.width - geo->x;
-		resize_edges = LAB_EDGE_LEFT;
 		break;
 	case LAB_EDGE_RIGHT:
 		geo->width = usable.x + usable.width
 			- rc.gap - ssd.right - view->pending.x;
-		resize_edges = LAB_EDGE_RIGHT;
 		break;
 	case LAB_EDGE_TOP:
 		geo->y = usable.y + ssd.top + rc.gap;
 		geo->height = view->pending.y + view->pending.height - geo->y;
-		resize_edges = LAB_EDGE_TOP;
 		break;
 	case LAB_EDGE_BOTTOM:
 		geo->height = usable.y + usable.height
 			- rc.gap - ssd.bottom - view->pending.y;
-		resize_edges = LAB_EDGE_BOTTOM;
 		break;
 	default:
 		return;
@@ -12045,15 +11320,6 @@ snap_grow_to_next_edge(struct view *view,
 		*geo = view->pending;
 		return;
 	}
-	struct border next_edges;
-	edges_initialize(&next_edges);
-	struct wlr_box origin =
-		snap_constraints_effective(view, resize_edges,   true);
-	edges_find_neighbors(&next_edges, view, origin, *geo,
-		output, LABWC_src_snap_c_check_edge,   false);
-	edges_adjust_resize_geom(view, next_edges,
-		resize_edges, geo,   true);
-	snap_constraints_set(view, resize_edges, *geo);
 }
 void
 snap_shrink_to_next_edge(struct view *view,
@@ -12061,25 +11327,20 @@ snap_shrink_to_next_edge(struct view *view,
 {
 	assert(view);
 	*geo = view->pending;
-	enum lab_edge resize_edges;
 	switch (direction) {
 	case LAB_EDGE_RIGHT:
 		geo->width = MAX(geo->width / 2, LAB_MIN_VIEW_WIDTH);
 		geo->x = view->pending.x + view->pending.width - geo->width;
-		resize_edges = LAB_EDGE_LEFT;
 		break;
 	case LAB_EDGE_LEFT:
 		geo->width = MAX(geo->width / 2, LAB_MIN_VIEW_WIDTH);
-		resize_edges = LAB_EDGE_RIGHT;
 		break;
 	case LAB_EDGE_BOTTOM:
 		geo->height = MAX(geo->height / 2, LAB_MIN_VIEW_HEIGHT);
 		geo->y = view->pending.y + view->pending.height - geo->height;
-		resize_edges = LAB_EDGE_TOP;
 		break;
 	case LAB_EDGE_TOP:
 		geo->height = MAX(geo->height / 2, LAB_MIN_VIEW_HEIGHT);
-		resize_edges = LAB_EDGE_BOTTOM;
 		break;
 	default:
 		return;
@@ -12089,17 +11350,6 @@ snap_shrink_to_next_edge(struct view *view,
 		*geo = view->pending;
 		return;
 	}
-	struct border next_edges;
-	edges_initialize(&next_edges);
-	struct wlr_box origin =
-		snap_constraints_effective(view, resize_edges,   true);
-	edges_find_outputs(&next_edges, view,
-		origin, *geo, view->output, LABWC_src_snap_c_check_edge);
-	edges_find_neighbors(&next_edges, view, origin, *geo,
-		view->output, LABWC_src_snap_c_check_edge,   false);
-	edges_adjust_resize_geom(view, next_edges,
-		resize_edges, geo,   true);
-	snap_constraints_set(view, resize_edges, *geo);
 }
 #define PADDING 4
 static void
@@ -13338,8 +12588,8 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 		theme->snapping_overlay_region.border_enabled = false;
 		theme->snapping_overlay_edge.border_enabled = false;
 	}
-	LABWC_src_theme_c_parse_hexstr("#8080b380", theme->snapping_overlay_region.bg_color);
-	LABWC_src_theme_c_parse_hexstr("#8080b380", theme->snapping_overlay_edge.bg_color);
+	LABWC_src_theme_c_parse_hexstr("#8080b340", theme->snapping_overlay_region.bg_color);
+	LABWC_src_theme_c_parse_hexstr("#8080b340", theme->snapping_overlay_edge.bg_color);
 	theme->snapping_overlay_region.border_width = INT_MIN;
 	theme->snapping_overlay_edge.border_width = INT_MIN;
 	zero_array(theme->snapping_overlay_region.border_color);
@@ -15776,14 +15026,14 @@ LABWC_src_view_c_shift_view_to_usable_1d(int size,
 	return MAX(next_pos, next_min);
 }
 void
-view_move_to_edge(struct view *view, enum lab_edge direction, bool snap_to_windows)
+view_move_to_edge(struct view *view, enum lab_edge direction)
 {
 	assert(view);
 	if (!output_is_usable(view->output)) {
 		return;
 	}
 	int dx = 0, dy = 0;
-	snap_move_to_edge(view, direction, snap_to_windows, &dx, &dy);
+	snap_move_to_edge(view, direction, &dx, &dy);
 	if (dx != 0 || dy != 0) {
 		view_move(view, view->pending.x + dx, view->pending.y + dy);
 		return;
@@ -16213,7 +15463,6 @@ view_destroy(struct view *view)
 {
 	assert(view);
 	wl_signal_emit_mutable(&view->events.destroy, NULL);
-	snap_constraints_invalidate(view);
 	if (view->mappable.connected) {
 		mappable_disconnect(&view->mappable);
 	}
@@ -18019,7 +17268,6 @@ LABWC_src_xdg_c_handle_commit(struct wl_listener *listener, void *data)
 		LABWC_src_xdg_c_center_fullscreen_if_needed(view);
 		view_moved(view);
 		if (!view->pending_configure_serial) {
-			snap_constraints_update(view);
 			view->pending = view->current;
 			toplevel->scheduled.width = view->current.width;
 			toplevel->scheduled.height = view->current.height;
@@ -18056,7 +17304,6 @@ LABWC_src_xdg_c_handle_configure_timeout(void *data)
 	}
 	LABWC_src_xdg_c_center_fullscreen_if_needed(view);
 	view_moved(view);
-	snap_constraints_update(view);
 	view->pending = view->current;
 	return 0;
 }
@@ -19839,9 +19086,6 @@ interactive_begin(struct view *view, enum input_mode mode, enum lab_edge edges)
 	if (rc.resize_indicator) {
 		resize_indicator_show(view);
 	}
-	if (rc.window_edge_strength) {
-		edges_calculate_visibility(view);
-	}
 }
 bool
 edge_from_cursor(struct seat *seat, struct output **dest_output,
@@ -20355,8 +19599,6 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	rc.doubleclick_time = 200;
 	rc.repeat_rate = 45;
 	rc.repeat_delay = 250;
-	rc.screen_edge_strength = 20;
-	rc.window_edge_strength = 20;
 	rc.unsnap_threshold = 20;
 	rc.unmaximize_threshold = 150;
 	rc.snap_edge_range_inner = 10;
