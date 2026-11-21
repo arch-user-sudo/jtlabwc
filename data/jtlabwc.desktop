@@ -4,4 +4,4 @@ Comment=A Wayland stacking compositor
 Exec=jtlabwc
 Icon=jtlabwc
 Type=Application
-DesktopNames=jtlabwc;wlroots
+DesktopNames=jtlabwc
