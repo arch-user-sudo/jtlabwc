@@ -119,21 +119,15 @@ install: jtlabwc jtlabwcctl
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/jtlabwcctl
 	mkdir -p $(DESTDIR)$(SESSIONDIR)
 	cp -f data/jtlabwc.desktop $(DESTDIR)$(SESSIONDIR)/jtlabwc.desktop
-	mkdir -p $(DESTDIR)$(DATADIR)/xdg-desktop-portal
-	cp -f data/labwc-portals.conf $(DESTDIR)$(DATADIR)/xdg-desktop-portal
 	mkdir -p $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps
 	cp -f data/jtlabwc.svg data/jtlabwc-symbolic.svg \
 		$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps
-	mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user
-	cp -f data/labwc-session.target $(DESTDIR)$(PREFIX)/lib/systemd/user
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/jtlabwc
 	rm -f $(DESTDIR)$(PREFIX)/bin/jtlabwcctl
 	rm -f $(DESTDIR)$(SESSIONDIR)/jtlabwc.desktop
-	rm -f $(DESTDIR)$(DATADIR)/xdg-desktop-portal/labwc-portals.conf
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/jtlabwc.svg
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/jtlabwc-symbolic.svg
-	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/labwc-session.target
 
 .PHONY: install uninstall
