@@ -1821,11 +1821,19 @@ static struct key_combos {
 		const char *name, *value;
 	} attributes[2];
 } key_combos[] = { {
-		.binding = "W-j",
-		.action = "NextWindow",
-	}, {
 		.binding = "W-k",
-		.action = "PreviousWindow",
+		.action = "Execute",
+		.attributes[0] = {
+			.name = "command",
+			.value = "jtlabctl next",
+		},
+	}, {
+		.binding = "W-j",
+		.action = "Execute",
+		.attributes[0] = {
+			.name = "command",
+			.value = "jtlabctl previous",
+		},
 	}, {
 		.binding = "W-Return",
 		.action = "Execute",
@@ -2122,6 +2130,24 @@ static struct mouse_combos {
 		const char *name, *value;
 	} attributes[2];
 } mouse_combos[] = { {
+		.context = "All",
+		.button = "W-Up",
+		.event = "Scroll",
+		.action = "Execute",
+		.attributes[0] = {
+			.name = "command",
+			.value = "jtlabctl previous",
+		},
+	}, {
+		.context = "All",
+		.button = "W-Down",
+		.event = "Scroll",
+		.action = "Execute",
+		.attributes[0] = {
+			.name = "command",
+			.value = "jtlabctl next",
+		},
+	}, {
 		.context = "Border",
 		.button = "Left",
 		.event = "Press",
@@ -2356,10 +2382,6 @@ struct LABWC_src_action_c_action_arg_list {
 	X(SNAP_TO_EDGE, "SnapToEdge") \
 	X(GROW_TO_EDGE, "GrowToEdge") \
 	X(SHRINK_TO_EDGE, "ShrinkToEdge") \
-	X(NEXT_WINDOW, "NextWindow") \
-	X(PREVIOUS_WINDOW, "PreviousWindow") \
-	X(NEXT_WINDOW_IMMEDIATE, "NextWindowImmediate") \
-	X(PREVIOUS_WINDOW_IMMEDIATE, "PreviousWindowImmediate") \
 	X(SHOW_MENU, "ShowMenu") \
 	X(TOGGLE_MAXIMIZE, "ToggleMaximize") \
 	X(MAXIMIZE, "Maximize") \
@@ -2528,40 +2550,6 @@ action_arg_from_xml_node(struct action *action, const char *nodename, const char
 					|| action->type == ACTION_TYPE_TOGGLE_SNAP_TO_EDGE)
 				&& !strcasecmp(argument, "combine")) {
 			LABWC_src_action_c_action_arg_add_bool(action, argument, parse_bool(content, false));
-			goto cleanup;
-		}
-		break;
-	case ACTION_TYPE_NEXT_WINDOW:
-	case ACTION_TYPE_PREVIOUS_WINDOW:
-	case ACTION_TYPE_NEXT_WINDOW_IMMEDIATE:
-	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE:
-		if (!strcasecmp(argument, "workspace")) {
-			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else if (!strcasecmp(content, "current")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else {
-			}
-			goto cleanup;
-		}
-		if (!strcasecmp(argument, "output")) {
-			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else if (!strcasecmp(content, "cursor")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else if (!strcasecmp(content, "focused")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else {
-			}
-			goto cleanup;
-		}
-		if (!strcasecmp(argument, "identifier")) {
-			if (!strcasecmp(content, "all")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else if (!strcasecmp(content, "current")) {
-				LABWC_src_action_c_action_arg_add_int(action, argument, 0);
-			} else {
-			}
 			goto cleanup;
 		}
 		break;
@@ -3005,6 +2993,8 @@ LABWC_src_action_c_warp_cursor(struct view *view, const char *to, const char *x,
 	wlr_cursor_warp(server.seat.cursor, NULL, goto_x, goto_y);
 	cursor_update_focus();
 }
+static bool jtlab_preview_cycling;
+
 static void
 LABWC_src_action_c_run_action(struct view *view, struct action *action,
 	struct cursor_context *ctx)
@@ -3029,6 +3019,12 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 		struct buf cmd = BUF_INIT;
 		buf_add(&cmd, action_get_str(action, "command", NULL));
 		buf_expand_tilde(&cmd);
+		if (cmd.data && strstr(cmd.data, "jtlabctl next"))
+			jtlab_preview_cycling = true;
+		else if (cmd.data && strstr(cmd.data, "jtlabctl previous"))
+			jtlab_preview_cycling = true;
+		else if (cmd.data && strstr(cmd.data, "jtlabctl focus"))
+			jtlab_preview_cycling = false;
 		spawn_async_no_shell(cmd.data);
 		buf_reset(&cmd);
 		break;
@@ -3072,52 +3068,6 @@ LABWC_src_action_c_run_action(struct view *view, struct action *action,
 			view_shrink_to_edge(view, edge);
 		}
 		break;
-	case ACTION_TYPE_NEXT_WINDOW:
-	case ACTION_TYPE_PREVIOUS_WINDOW: {
-			bool forward = action->type == ACTION_TYPE_NEXT_WINDOW;
-		enum lab_view_criteria criteria = LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
-			| LAB_VIEW_CRITERIA_NO_DIALOG;
-		struct wl_list *head = &server.views;
-		struct wl_list *from = forward && server.active_view
-			? &server.active_view->link : head;
-		for (struct wl_list *elm = (forward ? from->next : from->prev);
-				elm != head; elm = (forward ? elm->next : elm->prev)) {
-			struct view *v = wl_container_of(elm, view, link);
-			if (!view_matches_criteria(v, criteria)) {
-				continue;
-			}
-			if (server.active_view && forward) {
-				view_move_to_back(server.active_view);
-			}
-			desktop_focus_view(v, true);
-			break;
-		}
-		cursor_update_focus();
-		break;
-	}
-	case ACTION_TYPE_NEXT_WINDOW_IMMEDIATE:
-	case ACTION_TYPE_PREVIOUS_WINDOW_IMMEDIATE: {
-		bool forward = action->type == ACTION_TYPE_NEXT_WINDOW_IMMEDIATE;
-		enum lab_view_criteria criteria = LAB_VIEW_CRITERIA_NO_SKIP_WINDOW_SWITCHER
-			| LAB_VIEW_CRITERIA_NO_DIALOG;
-		struct wl_list *head = &server.views;
-		struct wl_list *from = forward && server.active_view
-			? &server.active_view->link : head;
-		for (struct wl_list *elm = (forward ? from->next : from->prev);
-				elm != head; elm = (forward ? elm->next : elm->prev)) {
-			struct view *v = wl_container_of(elm, view, link);
-			if (!view_matches_criteria(v, criteria)) {
-				continue;
-			}
-			if (server.active_view && forward) {
-				view_move_to_back(server.active_view);
-			}
-			desktop_focus_view(v, true);
-			break;
-		}
-		cursor_update_focus();
-		break;
-	}
 	case ACTION_TYPE_SHOW_MENU:
 		LABWC_src_action_c_show_menu(view, ctx,
 			action_get_str(action, "menu", NULL),
@@ -6483,9 +6433,8 @@ LABWC_src_input_cursor_c_process_cursor_axis(enum wl_pointer_axis orientation,
 					&& mousebind->mouse_event == MOUSE_ACTION_SCROLL) {
 				consumed |= mousebind->context == LAB_NODE_FRAME;
 				consumed |= mousebind->context == LAB_NODE_ALL;
-				if (info.run_action) {
+				if (info.run_action)
 					actions_run(ctx.view, &mousebind->actions, &ctx);
-				}
 			}
 		}
 	}
@@ -7685,6 +7634,16 @@ LABWC_src_input_keyboard_c_handle_compositor_keybindings(struct keyboard *keyboa
 	key_state_set_pressed(event->keycode,
 		event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
 	if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		for (int i = 0; i < keyinfo.translated.nr_syms; i++) {
+			if (keyinfo.translated.syms[i] == XKB_KEY_Super_L ||
+			    keyinfo.translated.syms[i] == XKB_KEY_Super_R) {
+				if (jtlab_preview_cycling) {
+					jtlab_preview_cycling = false;
+					spawn_async_no_shell("jtlabctl focus");
+				}
+				break;
+			}
+		}
 		if (LABWC_src_input_keyboard_c_cur_keybind && LABWC_src_input_keyboard_c_cur_keybind->on_release) {
 			key_state_bound_key_remove(event->keycode);
 			if (locked && !LABWC_src_input_keyboard_c_cur_keybind->allow_when_locked) {
