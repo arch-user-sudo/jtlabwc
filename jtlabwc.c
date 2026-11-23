@@ -4954,6 +4954,17 @@ is_pattern_opaque(cairo_pattern_t *pattern)
 	}
 	return false;
 }
+/* Explicit Pango font options override anything derived from the target
+ * surface, so every glyph renders without antialiasing. */
+static void
+font_no_antialias(PangoContext *ctx)
+{
+	cairo_font_options_t *opts = cairo_font_options_create();
+	cairo_font_options_set_antialias(opts, CAIRO_ANTIALIAS_NONE);
+	pango_cairo_context_set_font_options(ctx, opts);
+	cairo_font_options_destroy(opts);
+}
+
 PangoFontDescription *
 font_to_pango_desc(struct font *font)
 {
@@ -4978,6 +4989,7 @@ LABWC_src_common_font_c_font_extents(struct font *font, const char *string)
 	c = cairo_create(surface);
 	layout = pango_cairo_create_layout(c);
 	pango_context_set_round_glyph_positions(pango_layout_get_context(layout), false);
+	font_no_antialias(pango_layout_get_context(layout));
 	PangoFontDescription *desc = font_to_pango_desc(font);
 	pango_layout_set_font_description(layout, desc);
 	pango_layout_set_text(layout, string, -1);
@@ -5048,6 +5060,7 @@ font_buffer_create(struct lab_data_buffer **buffer, int max_width,
 	cairo_move_to(cairo, 0, (height - computed_height) / 2);
 	PangoLayout *layout = pango_cairo_create_layout(cairo);
 	pango_context_set_round_glyph_positions(pango_layout_get_context(layout), false);
+	font_no_antialias(pango_layout_get_context(layout));
 	pango_layout_set_width(layout, width * PANGO_SCALE);
 	if (use_markup) {
 		pango_layout_set_markup(layout, text, -1);
@@ -5055,13 +5068,6 @@ font_buffer_create(struct lab_data_buffer **buffer, int max_width,
 		pango_layout_set_text(layout, text, -1);
 	}
 	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-	if (!opaque_bg) {
-		cairo_font_options_t *opts = cairo_font_options_create();
-		cairo_font_options_set_antialias(opts, CAIRO_ANTIALIAS_GRAY);
-		PangoContext *ctx = pango_layout_get_context(layout);
-		pango_cairo_context_set_font_options(ctx, opts);
-		cairo_font_options_destroy(opts);
-	}
 	PangoFontDescription *desc = font_to_pango_desc(font);
 	pango_layout_set_font_description(layout, desc);
 	pango_font_description_free(desc);
@@ -8368,6 +8374,7 @@ LABWC_src_main_c_die_on_no_fonts(void)
 {
 	PangoContext *context = pango_font_map_create_context(
 		pango_cairo_font_map_get_default());
+	font_no_antialias(context);
 	PangoLayout *layout = pango_layout_new(context);
 	pango_layout_set_text(layout, "abcdefg", -1);
 	int nr_unknown_glyphs = pango_layout_get_unknown_glyphs_count(layout);
