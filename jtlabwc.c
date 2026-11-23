@@ -1821,14 +1821,14 @@ static struct key_combos {
 		const char *name, *value;
 	} attributes[2];
 } key_combos[] = { {
-		.binding = "W-k",
+		.binding = "W-j",
 		.action = "Execute",
 		.attributes[0] = {
 			.name = "command",
 			.value = "jtlabctl next",
 		},
 	}, {
-		.binding = "W-j",
+		.binding = "W-k",
 		.action = "Execute",
 		.attributes[0] = {
 			.name = "command",
