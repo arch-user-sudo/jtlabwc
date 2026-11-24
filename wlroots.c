@@ -17166,6 +17166,17 @@ enum wlr_scene_node_type {
 	WLR_SCENE_NODE_BUFFER,
 };
 
+/* Individual corners, modelled after SceneFX's corner_location flags. */
+enum wlr_scene_corner {
+	WLR_SCENE_CORNER_TOP_LEFT = 1 << 0,
+	WLR_SCENE_CORNER_TOP_RIGHT = 1 << 1,
+	WLR_SCENE_CORNER_BOTTOM_LEFT = 1 << 2,
+	WLR_SCENE_CORNER_BOTTOM_RIGHT = 1 << 3,
+	WLR_SCENE_CORNER_BOTTOM =
+		WLR_SCENE_CORNER_BOTTOM_LEFT | WLR_SCENE_CORNER_BOTTOM_RIGHT,
+	WLR_SCENE_CORNER_ALL = 0xf,
+};
+
 /** A node is an object in the scene. */
 struct wlr_scene_node {
 	enum wlr_scene_node_type type;
@@ -17317,6 +17328,11 @@ struct wlr_scene_buffer {
 		bool own_buffer;
 		int buffer_width, buffer_height;
 		bool buffer_is_opaque;
+
+		/* Rounded clipping of client buffers.  radius is in scene
+		 * coordinates; corners is a wlr_scene_corner mask. */
+		int rounded_radius;
+		uint32_t rounded_corners;
 
 		struct wlr_drm_syncobj_timeline *wait_timeline;
 		uint64_t wait_point;
@@ -17633,6 +17649,14 @@ void wlr_scene_buffer_set_buffer_with_options(struct wlr_scene_buffer *scene_buf
  */
 void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	const pixman_region32_t *region);
+
+/**
+ * Clip the selected corners of this buffer to the given radius (in scene
+ * coordinates). `corners` is a bitmask of enum wlr_scene_corner values.
+ * Set radius to zero to disable rounded clipping.
+ */
+void wlr_scene_buffer_set_rounded_corners(struct wlr_scene_buffer *scene_buffer,
+	int radius, uint32_t corners);
 
 /**
  * Set the source rectangle describing the region of the buffer which will be
@@ -80102,6 +80126,7 @@ void wlr_scene_subsurface_tree_set_clip(struct wlr_scene_node *node,
 
 /* ===== source: types/scene/surface.c ===== */
 #include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 
 
@@ -80476,15 +80501,75 @@ static void WLR_types_scene_surface_c_handle_scene_surface_surface_commit(
 	}
 }
 
+static bool WLR_types_scene_surface_c_point_in_rounded_rect(double sx, double sy, int width, int height,
+		int radius, uint32_t corners) {
+	if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+		return false;
+	}
+
+	int r = width < height ? width / 2 : height / 2;
+	if (radius < r) {
+		r = radius;
+	}
+	if (r <= 0) {
+		return true;
+	}
+
+	double cx, cy;
+	if (sx < r && sy < r
+			&& (corners & WLR_SCENE_CORNER_TOP_LEFT)) {
+		cx = r;
+		cy = r;
+	} else if (sx > width - r && sy < r
+			&& (corners & WLR_SCENE_CORNER_TOP_RIGHT)) {
+		cx = width - r;
+		cy = r;
+	} else if (sx < r && sy > height - r
+			&& (corners & WLR_SCENE_CORNER_BOTTOM_LEFT)) {
+		cx = r;
+		cy = height - r;
+	} else if (sx > width - r && sy > height - r
+			&& (corners & WLR_SCENE_CORNER_BOTTOM_RIGHT)) {
+		cx = width - r;
+		cy = height - r;
+	} else {
+		return true;
+	}
+
+	double dx = sx - cx;
+	double dy = sy - cy;
+	return dx * dx + dy * dy <= (double)r * (double)r;
+}
+
 static bool WLR_types_scene_surface_c_scene_buffer_point_accepts_input(struct wlr_scene_buffer *scene_buffer,
 		double *sx, double *sy) {
 	struct wlr_scene_surface *scene_surface =
 		wlr_scene_surface_try_from_buffer(scene_buffer);
 
+	/* sx/sy are in the cropped buffer's coordinate space.  Rounded hit-
+	 * testing must use that same size; the root surface may be larger than
+	 * the clipped window geometry (e.g. CSD clients with shadows). */
+	int width = scene_buffer->dst_width > 0
+		? scene_buffer->dst_width : 0;
+	int height = scene_buffer->dst_height > 0
+		? scene_buffer->dst_height : 0;
+	struct wlr_surface *surface = scene_surface->surface;
+	if (width <= 0) {
+		width = surface->current.width;
+	}
+	if (height <= 0) {
+		height = surface->current.height;
+	}
+	if (scene_buffer->rounded_radius > 0
+			&& scene_buffer->rounded_corners != 0
+			&& !WLR_types_scene_surface_c_point_in_rounded_rect(*sx, *sy, width, height,
+				scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners)) {
+		return false;
+	}
+
 	*sx += scene_surface->clip.x;
 	*sy += scene_surface->clip.y;
-
-	struct wlr_surface *surface = scene_surface->surface;
 #if WLR_HAS_XWAYLAND
 	struct wlr_xwayland_surface *xsurface =
 		wlr_xwayland_surface_try_from_wlr_surface(surface);
@@ -80587,6 +80672,8 @@ void scene_surface_set_clip(struct wlr_scene_surface *surface, struct wlr_box *c
 
 /* ===== source: types/scene/wlr_scene.c ===== */
 #include <assert.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -80892,6 +80979,76 @@ bool scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box,
 	return WLR_types_scene_wlr_scene_c__scene_nodes_in_box(node, box, iterator, user_data, x, y);
 }
 
+static void WLR_types_scene_wlr_scene_c_region_subtract_rounded_corners(pixman_region32_t *region,
+		const struct wlr_box *box, int radius, uint32_t corners) {
+	if (radius <= 0 || corners == 0 || box->width <= 0 || box->height <= 0) {
+		return;
+	}
+
+	int r = box->width < box->height ? box->width / 2 : box->height / 2;
+	if (radius < r) {
+		r = radius;
+	}
+	if (r <= 0) {
+		return;
+	}
+
+	int x0 = box->x;
+	int y0 = box->y;
+	int x1 = x0 + box->width;
+	int y1 = y0 + box->height;
+
+	bool top = corners & (WLR_SCENE_CORNER_TOP_LEFT
+		| WLR_SCENE_CORNER_TOP_RIGHT);
+	bool bottom = corners & WLR_SCENE_CORNER_BOTTOM;
+	bool left = corners & (WLR_SCENE_CORNER_TOP_LEFT
+		| WLR_SCENE_CORNER_BOTTOM_LEFT);
+	bool right = corners & (WLR_SCENE_CORNER_TOP_RIGHT
+		| WLR_SCENE_CORNER_BOTTOM_RIGHT);
+
+	pixman_region32_t cut_region;
+	pixman_region32_init(&cut_region);
+	for (int i = 0; i < r; i++) {
+		/* Sample the centre of each pixel row.  floor() keeps the
+		 * antialiased arc aligned with the compositor-drawn border;
+		 * ceil() used to shave one extra pixel off every corner. */
+		double inner = (double)r - ((double)i + 0.5);
+		double cut = (double)r
+			- sqrt((double)r * (double)r - inner * inner);
+		int c = (int)floor(cut);
+		if (c < 0) {
+			c = 0;
+		} else if (c > r) {
+			c = r;
+		}
+		if (c == 0) {
+			continue;
+		}
+		if (top) {
+			if (left) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x0, y0 + i, c, 1);
+			}
+			if (right) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x1 - c, y0 + i, c, 1);
+			}
+		}
+		if (bottom) {
+			if (left) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x0, y1 - i - 1, c, 1);
+			}
+			if (right) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x1 - c, y1 - i - 1, c, 1);
+			}
+		}
+	}
+	pixman_region32_subtract(region, region, &cut_region);
+	pixman_region32_fini(&cut_region);
+}
+
 static void WLR_types_scene_wlr_scene_c_scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 		pixman_region32_t *opaque) {
 	int width, height;
@@ -80917,8 +81074,22 @@ static void WLR_types_scene_wlr_scene_c_scene_node_opaque_region(struct wlr_scen
 			pixman_region32_copy(opaque, &scene_buffer->opaque_region);
 			pixman_region32_intersect_rect(opaque, opaque, 0, 0, width, height);
 			pixman_region32_translate(opaque, x, y);
-			return;
+		} else {
+			pixman_region32_fini(opaque);
+			pixman_region32_init_rect(opaque, x, y, width, height);
 		}
+
+		if (scene_buffer->rounded_radius > 0
+				&& scene_buffer->rounded_corners != 0) {
+			struct wlr_box box = {
+				.x = x, .y = y,
+				.width = width, .height = height,
+			};
+			WLR_types_scene_wlr_scene_c_region_subtract_rounded_corners(opaque, &box,
+				scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners);
+		}
+		return;
 	}
 
 	pixman_region32_fini(opaque);
@@ -81703,6 +81874,24 @@ void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	pixman_region32_fini(&update_region);
 }
 
+void wlr_scene_buffer_set_rounded_corners(struct wlr_scene_buffer *scene_buffer,
+		int radius, uint32_t corners) {
+	if (radius < 0) {
+		radius = 0;
+	}
+	if (radius == 0) {
+		corners = 0;
+	}
+	if (scene_buffer->rounded_radius == radius
+			&& scene_buffer->rounded_corners == corners) {
+		return;
+	}
+
+	scene_buffer->rounded_radius = radius;
+	scene_buffer->rounded_corners = corners;
+	WLR_types_scene_wlr_scene_c_scene_node_update(&scene_buffer->node, NULL);
+}
+
 void wlr_scene_buffer_set_source_box(struct wlr_scene_buffer *scene_buffer,
 		const struct wlr_fbox *box) {
 	if (wlr_fbox_equal(&scene_buffer->src_box, box)) {
@@ -82067,17 +82256,6 @@ static float WLR_types_scene_wlr_scene_c_get_luminance_multiplier(const struct w
 static void WLR_types_scene_wlr_scene_c_scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
 	struct wlr_scene_node *node = entry->node;
 
-	pixman_region32_t render_region;
-	pixman_region32_init(&render_region);
-	pixman_region32_copy(&render_region, &node->visible);
-	pixman_region32_translate(&render_region, -data->logical.x, -data->logical.y);
-	WLR_types_scene_wlr_scene_c_logical_to_buffer_coords(&render_region, data, true);
-	pixman_region32_intersect(&render_region, &render_region, &data->damage);
-	if (pixman_region32_empty(&render_region)) {
-		pixman_region32_fini(&render_region);
-		return;
-	}
-
 	int x = entry->x - data->logical.x;
 	int y = entry->y - data->logical.y;
 
@@ -82087,6 +82265,35 @@ static void WLR_types_scene_wlr_scene_c_scene_entry_render(struct render_list_en
 	};
 	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	WLR_types_scene_wlr_scene_c_transform_output_box(&dst_box, data);
+
+	pixman_region32_t render_region;
+	pixman_region32_init(&render_region);
+	pixman_region32_copy(&render_region, &node->visible);
+	pixman_region32_translate(&render_region, -data->logical.x, -data->logical.y);
+	if (node->type == WLR_SCENE_NODE_BUFFER) {
+		struct wlr_scene_buffer *scene_buffer =
+			wlr_scene_buffer_from_node(node);
+		if (scene_buffer->rounded_radius > 0
+				&& scene_buffer->rounded_corners != 0) {
+			/* Clip in logical coordinates so scale_region()/transform
+			 * rotate the corner mask together with the buffer. */
+			struct wlr_box rounded_box = {
+				.x = x,
+				.y = y,
+			};
+			scene_node_get_size(node, &rounded_box.width,
+				&rounded_box.height);
+			WLR_types_scene_wlr_scene_c_region_subtract_rounded_corners(&render_region,
+				&rounded_box, scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners);
+		}
+	}
+	WLR_types_scene_wlr_scene_c_logical_to_buffer_coords(&render_region, data, true);
+	pixman_region32_intersect(&render_region, &render_region, &data->damage);
+	if (pixman_region32_empty(&render_region)) {
+		pixman_region32_fini(&render_region);
+		return;
+	}
 
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
@@ -82701,6 +82908,10 @@ static enum scene_direct_scanout_result WLR_types_scene_wlr_scene_c_scene_entry_
 
 	struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 	if (buffer->buffer == NULL) {
+		return SCANOUT_INELIGIBLE;
+	}
+
+	if (buffer->rounded_radius > 0 && buffer->rounded_corners != 0) {
 		return SCANOUT_INELIGIBLE;
 	}
 

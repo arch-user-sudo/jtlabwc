@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 #include <wlr/types/wlr_alpha_modifier_v1.h>
 #include <wlr/types/wlr_color_management_v1.h>
@@ -387,15 +388,75 @@ static void handle_scene_surface_surface_commit(
 	}
 }
 
+static bool point_in_rounded_rect(double sx, double sy, int width, int height,
+		int radius, uint32_t corners) {
+	if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+		return false;
+	}
+
+	int r = width < height ? width / 2 : height / 2;
+	if (radius < r) {
+		r = radius;
+	}
+	if (r <= 0) {
+		return true;
+	}
+
+	double cx, cy;
+	if (sx < r && sy < r
+			&& (corners & WLR_SCENE_CORNER_TOP_LEFT)) {
+		cx = r;
+		cy = r;
+	} else if (sx > width - r && sy < r
+			&& (corners & WLR_SCENE_CORNER_TOP_RIGHT)) {
+		cx = width - r;
+		cy = r;
+	} else if (sx < r && sy > height - r
+			&& (corners & WLR_SCENE_CORNER_BOTTOM_LEFT)) {
+		cx = r;
+		cy = height - r;
+	} else if (sx > width - r && sy > height - r
+			&& (corners & WLR_SCENE_CORNER_BOTTOM_RIGHT)) {
+		cx = width - r;
+		cy = height - r;
+	} else {
+		return true;
+	}
+
+	double dx = sx - cx;
+	double dy = sy - cy;
+	return dx * dx + dy * dy <= (double)r * (double)r;
+}
+
 static bool scene_buffer_point_accepts_input(struct wlr_scene_buffer *scene_buffer,
 		double *sx, double *sy) {
 	struct wlr_scene_surface *scene_surface =
 		wlr_scene_surface_try_from_buffer(scene_buffer);
 
+	/* sx/sy are in the cropped buffer's coordinate space.  Rounded hit-
+	 * testing must use that same size; the root surface may be larger than
+	 * the clipped window geometry (e.g. CSD clients with shadows). */
+	int width = scene_buffer->dst_width > 0
+		? scene_buffer->dst_width : 0;
+	int height = scene_buffer->dst_height > 0
+		? scene_buffer->dst_height : 0;
+	struct wlr_surface *surface = scene_surface->surface;
+	if (width <= 0) {
+		width = surface->current.width;
+	}
+	if (height <= 0) {
+		height = surface->current.height;
+	}
+	if (scene_buffer->rounded_radius > 0
+			&& scene_buffer->rounded_corners != 0
+			&& !point_in_rounded_rect(*sx, *sy, width, height,
+				scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners)) {
+		return false;
+	}
+
 	*sx += scene_surface->clip.x;
 	*sy += scene_surface->clip.y;
-
-	struct wlr_surface *surface = scene_surface->surface;
 #if WLR_HAS_XWAYLAND
 	struct wlr_xwayland_surface *xsurface =
 		wlr_xwayland_surface_try_from_wlr_surface(surface);

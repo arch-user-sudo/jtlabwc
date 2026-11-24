@@ -58,6 +58,17 @@ enum wlr_scene_node_type {
 	WLR_SCENE_NODE_BUFFER,
 };
 
+/* Individual corners, modelled after SceneFX's corner_location flags. */
+enum wlr_scene_corner {
+	WLR_SCENE_CORNER_TOP_LEFT = 1 << 0,
+	WLR_SCENE_CORNER_TOP_RIGHT = 1 << 1,
+	WLR_SCENE_CORNER_BOTTOM_LEFT = 1 << 2,
+	WLR_SCENE_CORNER_BOTTOM_RIGHT = 1 << 3,
+	WLR_SCENE_CORNER_BOTTOM =
+		WLR_SCENE_CORNER_BOTTOM_LEFT | WLR_SCENE_CORNER_BOTTOM_RIGHT,
+	WLR_SCENE_CORNER_ALL = 0xf,
+};
+
 /** A node is an object in the scene. */
 struct wlr_scene_node {
 	enum wlr_scene_node_type type;
@@ -209,6 +220,11 @@ struct wlr_scene_buffer {
 		bool own_buffer;
 		int buffer_width, buffer_height;
 		bool buffer_is_opaque;
+
+		/* Rounded clipping of client buffers.  radius is in scene
+		 * coordinates; corners is a wlr_scene_corner mask. */
+		int rounded_radius;
+		uint32_t rounded_corners;
 
 		struct wlr_drm_syncobj_timeline *wait_timeline;
 		uint64_t wait_point;
@@ -525,6 +541,14 @@ void wlr_scene_buffer_set_buffer_with_options(struct wlr_scene_buffer *scene_buf
  */
 void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	const pixman_region32_t *region);
+
+/**
+ * Clip the selected corners of this buffer to the given radius (in scene
+ * coordinates). `corners` is a bitmask of enum wlr_scene_corner values.
+ * Set radius to zero to disable rounded clipping.
+ */
+void wlr_scene_buffer_set_rounded_corners(struct wlr_scene_buffer *scene_buffer,
+	int radius, uint32_t corners);
 
 /**
  * Set the source rectangle describing the region of the buffer which will be

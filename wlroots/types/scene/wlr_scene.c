@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wlr/backend.h>
@@ -326,6 +328,76 @@ bool scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box,
 	return _scene_nodes_in_box(node, box, iterator, user_data, x, y);
 }
 
+static void region_subtract_rounded_corners(pixman_region32_t *region,
+		const struct wlr_box *box, int radius, uint32_t corners) {
+	if (radius <= 0 || corners == 0 || box->width <= 0 || box->height <= 0) {
+		return;
+	}
+
+	int r = box->width < box->height ? box->width / 2 : box->height / 2;
+	if (radius < r) {
+		r = radius;
+	}
+	if (r <= 0) {
+		return;
+	}
+
+	int x0 = box->x;
+	int y0 = box->y;
+	int x1 = x0 + box->width;
+	int y1 = y0 + box->height;
+
+	bool top = corners & (WLR_SCENE_CORNER_TOP_LEFT
+		| WLR_SCENE_CORNER_TOP_RIGHT);
+	bool bottom = corners & WLR_SCENE_CORNER_BOTTOM;
+	bool left = corners & (WLR_SCENE_CORNER_TOP_LEFT
+		| WLR_SCENE_CORNER_BOTTOM_LEFT);
+	bool right = corners & (WLR_SCENE_CORNER_TOP_RIGHT
+		| WLR_SCENE_CORNER_BOTTOM_RIGHT);
+
+	pixman_region32_t cut_region;
+	pixman_region32_init(&cut_region);
+	for (int i = 0; i < r; i++) {
+		/* Sample the centre of each pixel row.  floor() keeps the
+		 * antialiased arc aligned with the compositor-drawn border;
+		 * ceil() used to shave one extra pixel off every corner. */
+		double inner = (double)r - ((double)i + 0.5);
+		double cut = (double)r
+			- sqrt((double)r * (double)r - inner * inner);
+		int c = (int)floor(cut);
+		if (c < 0) {
+			c = 0;
+		} else if (c > r) {
+			c = r;
+		}
+		if (c == 0) {
+			continue;
+		}
+		if (top) {
+			if (left) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x0, y0 + i, c, 1);
+			}
+			if (right) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x1 - c, y0 + i, c, 1);
+			}
+		}
+		if (bottom) {
+			if (left) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x0, y1 - i - 1, c, 1);
+			}
+			if (right) {
+				pixman_region32_union_rect(&cut_region, &cut_region,
+					x1 - c, y1 - i - 1, c, 1);
+			}
+		}
+	}
+	pixman_region32_subtract(region, region, &cut_region);
+	pixman_region32_fini(&cut_region);
+}
+
 static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 		pixman_region32_t *opaque) {
 	int width, height;
@@ -351,8 +423,22 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 			pixman_region32_copy(opaque, &scene_buffer->opaque_region);
 			pixman_region32_intersect_rect(opaque, opaque, 0, 0, width, height);
 			pixman_region32_translate(opaque, x, y);
-			return;
+		} else {
+			pixman_region32_fini(opaque);
+			pixman_region32_init_rect(opaque, x, y, width, height);
 		}
+
+		if (scene_buffer->rounded_radius > 0
+				&& scene_buffer->rounded_corners != 0) {
+			struct wlr_box box = {
+				.x = x, .y = y,
+				.width = width, .height = height,
+			};
+			region_subtract_rounded_corners(opaque, &box,
+				scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners);
+		}
+		return;
 	}
 
 	pixman_region32_fini(opaque);
@@ -1137,6 +1223,24 @@ void wlr_scene_buffer_set_opaque_region(struct wlr_scene_buffer *scene_buffer,
 	pixman_region32_fini(&update_region);
 }
 
+void wlr_scene_buffer_set_rounded_corners(struct wlr_scene_buffer *scene_buffer,
+		int radius, uint32_t corners) {
+	if (radius < 0) {
+		radius = 0;
+	}
+	if (radius == 0) {
+		corners = 0;
+	}
+	if (scene_buffer->rounded_radius == radius
+			&& scene_buffer->rounded_corners == corners) {
+		return;
+	}
+
+	scene_buffer->rounded_radius = radius;
+	scene_buffer->rounded_corners = corners;
+	scene_node_update(&scene_buffer->node, NULL);
+}
+
 void wlr_scene_buffer_set_source_box(struct wlr_scene_buffer *scene_buffer,
 		const struct wlr_fbox *box) {
 	if (wlr_fbox_equal(&scene_buffer->src_box, box)) {
@@ -1501,17 +1605,6 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
 static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
 	struct wlr_scene_node *node = entry->node;
 
-	pixman_region32_t render_region;
-	pixman_region32_init(&render_region);
-	pixman_region32_copy(&render_region, &node->visible);
-	pixman_region32_translate(&render_region, -data->logical.x, -data->logical.y);
-	logical_to_buffer_coords(&render_region, data, true);
-	pixman_region32_intersect(&render_region, &render_region, &data->damage);
-	if (pixman_region32_empty(&render_region)) {
-		pixman_region32_fini(&render_region);
-		return;
-	}
-
 	int x = entry->x - data->logical.x;
 	int y = entry->y - data->logical.y;
 
@@ -1521,6 +1614,35 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	};
 	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	transform_output_box(&dst_box, data);
+
+	pixman_region32_t render_region;
+	pixman_region32_init(&render_region);
+	pixman_region32_copy(&render_region, &node->visible);
+	pixman_region32_translate(&render_region, -data->logical.x, -data->logical.y);
+	if (node->type == WLR_SCENE_NODE_BUFFER) {
+		struct wlr_scene_buffer *scene_buffer =
+			wlr_scene_buffer_from_node(node);
+		if (scene_buffer->rounded_radius > 0
+				&& scene_buffer->rounded_corners != 0) {
+			/* Clip in logical coordinates so scale_region()/transform
+			 * rotate the corner mask together with the buffer. */
+			struct wlr_box rounded_box = {
+				.x = x,
+				.y = y,
+			};
+			scene_node_get_size(node, &rounded_box.width,
+				&rounded_box.height);
+			region_subtract_rounded_corners(&render_region,
+				&rounded_box, scene_buffer->rounded_radius,
+				scene_buffer->rounded_corners);
+		}
+	}
+	logical_to_buffer_coords(&render_region, data, true);
+	pixman_region32_intersect(&render_region, &render_region, &data->damage);
+	if (pixman_region32_empty(&render_region)) {
+		pixman_region32_fini(&render_region);
+		return;
+	}
 
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
@@ -2135,6 +2257,10 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
 
 	struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 	if (buffer->buffer == NULL) {
+		return SCANOUT_INELIGIBLE;
+	}
+
+	if (buffer->rounded_radius > 0 && buffer->rounded_corners != 0) {
 		return SCANOUT_INELIGIBLE;
 	}
 

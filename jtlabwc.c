@@ -49,9 +49,47 @@
 static void jtlabwc_control_init(void);
 static void jtlabwc_control_finish(void);
 
+/* Focus-accent border animation (see ~/.config/jt/appearance.conf). */
+struct ssd;
+struct jtlabwc_border_anim;
+static bool jtlabwc_border_anim_enabled = true;
+static struct wl_event_source *jtlabwc_border_anim_timer;
+static void jtlabwc_appearance_config_load(void);
+static void jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim);
+static void jtlabwc_border_anim_stop(struct jtlabwc_border_anim *anim);
+static void jtlabwc_border_anim_finish(void);
+static bool jtlabwc_border_anim_is_csd(struct jtlabwc_border_anim *anim);
+static struct wlr_scene_tree *
+jtlabwc_border_anim_csd_parent(struct jtlabwc_border_anim *anim);
+
 struct view;
 struct server;
 struct cursor_context;
+struct lab_data_buffer;
+
+struct jtlabwc_border_anim {
+	struct wlr_scene_tree *tree;
+	struct wlr_scene_buffer *seg[2];
+	struct view *view;
+	struct wlr_scene_tree *frame_tree;
+	int top_offset;
+	bool running;
+	int elapsed_ms;
+};
+
+/* Permanent rounded frame drawn around CSD XDG toplevels.  Every piece is a
+ * small no-input scene buffer so the frame never blocks CSD resize handles
+ * and never allocates a window-sized transparent buffer. */
+struct jtlabwc_view_border {
+	struct wlr_scene_tree *tree;
+	struct wlr_scene_buffer *left, *right, *top, *bottom;
+	struct wlr_scene_buffer *corner[4];
+	int frame_thickness, frame_radius;
+	float frame_color[4];
+	bool frame_valid;
+	bool active;
+	struct jtlabwc_border_anim anim;
+};
 struct action {
 	struct wl_list link;
 	uint32_t type;
@@ -892,6 +930,8 @@ struct theme {
 		struct lab_data_buffer *titlebar_fill;
 		struct lab_data_buffer *corner_top_left_normal;
 		struct lab_data_buffer *corner_top_right_normal;
+		struct lab_data_buffer *corner_bottom_left_normal;
+		struct lab_data_buffer *corner_bottom_right_normal;
 	} window;
 	int menu_item_height;
 	int menu_header_height;
@@ -1042,6 +1082,7 @@ struct view {
 	uint32_t pending_configure_serial;
 	struct wl_event_source *pending_configure_timeout;
 	struct ssd *ssd;
+	struct jtlabwc_view_border border;
 	struct resize_indicator {
 		int width, height;
 		struct wlr_scene_tree *tree;
@@ -1134,6 +1175,10 @@ void view_resize_relative(struct view *view,
 void view_move_relative(struct view *view, int x, int y);
 void view_move(struct view *view, int x, int y);
 void view_moved(struct view *view);
+void jtlabwc_view_border_create(struct view *view);
+void jtlabwc_view_border_destroy(struct view *view);
+void jtlabwc_view_border_update(struct view *view);
+void jtlabwc_view_border_set_active(struct view *view, bool active);
 void view_minimize(struct view *view, bool minimized);
 bool view_compute_centered_position(struct view *view,
 	const struct wlr_box *ref, int w, int h, int *x, int *y);
@@ -1738,8 +1783,13 @@ struct ssd {
 	} titlebar;
 	struct ssd_border_scene {
 		struct wlr_scene_tree *tree;
+		/* Bottom corners must paint over the client surface, so they live
+		 * in a separate tree raised above it instead of inside ssd->tree. */
+		struct wlr_scene_tree *corner_tree;
 		struct wlr_scene_rect *top, *bottom, *left, *right;
+		struct wlr_scene_buffer *corner_left, *corner_right;
 	} border;
+	struct jtlabwc_border_anim border_anim;
 	struct border margin;
 };
 struct ssd_button {
@@ -4851,6 +4901,106 @@ lab_wlr_surface_from_node(struct wlr_scene_node *node)
 		}
 	}
 	return NULL;
+}
+/* Decoration buffers are transparent in places, but the scene hit-test only
+ * sees their bounding box.  Without this they swallow all pointer input. */
+static bool
+jtlabwc_decoration_no_input(struct wlr_scene_buffer *buffer, double *sx, double *sy)
+{
+	return false;
+}
+static void
+jtlabwc_buffer_set_no_input(struct wlr_scene_buffer *buffer)
+{
+	if (buffer) {
+		buffer->point_accepts_input = jtlabwc_decoration_no_input;
+	}
+}
+/* Tiny reusable solid-colour buffer.  Scene buffers can be stretched with
+ * wlr_scene_buffer_set_dest_size(), so four edges only need one 1x1 pixel. */
+static struct lab_data_buffer *
+jtlabwc_solid_color_buffer(const float color[4])
+{
+	struct lab_data_buffer *buffer = buffer_create_cairo(1, 1, 1);
+	if (!buffer) {
+		return NULL;
+	}
+	cairo_t *cairo = cairo_create(buffer->surface);
+	set_cairo_color(cairo, color);
+	cairo_paint(cairo);
+	cairo_surface_flush(buffer->surface);
+	cairo_destroy(cairo);
+	return buffer;
+}
+/* CSD clients put invisible resize handles outside the XDG window geometry.
+ * Clip the surface to the geometry plus a small margin: enough input reaches
+ * those handles, while shadows farther out are still hidden. */
+#define JTLABWC_CSD_RESIZE_MARGIN 8
+static void
+jtlabwc_view_set_csd_clip(struct view *view, bool enabled)
+{
+	if (!view || view->type != LAB_XDG_SHELL_VIEW || !view->content_tree) {
+		return;
+	}
+	if (!enabled) {
+		wlr_scene_subsurface_tree_set_clip(&view->content_tree->node, NULL);
+		return;
+	}
+	struct wlr_xdg_surface *xdg_surface = xdg_surface_from_view(view);
+	struct wlr_box clip = xdg_surface ? xdg_surface->geometry
+		: (struct wlr_box){0};
+	if (clip.width <= 0 || clip.height <= 0) {
+		clip = (struct wlr_box){
+			.width = view->current.width,
+			.height = view->current.height,
+		};
+	}
+	int margin = JTLABWC_CSD_RESIZE_MARGIN;
+	if (rc.theme) {
+		margin = MAX(margin, rc.theme->border_width);
+	}
+	clip.x -= margin;
+	clip.y -= margin;
+	clip.width += 2 * margin;
+	clip.height += 2 * margin;
+	wlr_scene_subsurface_tree_set_clip(&view->content_tree->node, &clip);
+}
+struct jtlabwc_round_buffer_ctx {
+	struct wlr_surface *surface;
+	int radius;
+	uint32_t corners;
+};
+static void
+jtlabwc_round_buffer_iterator(struct wlr_scene_buffer *buffer, int sx, int sy,
+		void *user_data)
+{
+	struct jtlabwc_round_buffer_ctx *ctx = user_data;
+	struct wlr_scene_surface *scene_surface =
+		wlr_scene_surface_try_from_buffer(buffer);
+	if (!scene_surface || scene_surface->surface != ctx->surface) {
+		return;
+	}
+	wlr_scene_buffer_set_rounded_corners(buffer, ctx->radius, ctx->corners);
+}
+void
+jtlabwc_view_set_client_rounding(struct view *view, int radius, uint32_t corners)
+{
+	if (!view || !view->surface) {
+		return;
+	}
+	struct jtlabwc_round_buffer_ctx ctx = {
+		.surface = view->surface,
+		.radius = radius,
+		.corners = corners,
+	};
+	if (view->content_tree) {
+		wlr_scene_node_for_each_buffer(&view->content_tree->node,
+			jtlabwc_round_buffer_iterator, &ctx);
+	}
+	if (view->capture.scene) {
+		wlr_scene_node_for_each_buffer(&view->capture.scene->tree.node,
+			jtlabwc_round_buffer_iterator, &ctx);
+	}
 }
 struct wlr_scene_tree *
 lab_wlr_scene_tree_create(struct wlr_scene_tree *parent)
@@ -10784,6 +10934,7 @@ server_start(void)
 void
 server_finish(void)
 {
+	jtlabwc_border_anim_finish();
 #if HAVE_XWAYLAND
 	xwayland_server_finish();
 #endif
@@ -11460,24 +11611,49 @@ ssd_border_create(struct ssd *ssd)
 	wlr_scene_node_set_position(&ssd->border.tree->node, -theme->border_width, 0);
 	struct wlr_scene_tree *parent = ssd->border.tree;
 	float *color = theme->window.border_color;
+	bool rounded = !ssd->state.was_squared;
+	int side_height = rounded ? MAX(height - corner_width, 0) : height;
+	int bottom_width = rounded
+		? MAX(width - 2 * corner_width, 0) : full_width;
+	int bottom_x = rounded ? theme->border_width + corner_width : 0;
+	int corner_y = height - corner_width;
 	ssd->border.left = lab_wlr_scene_rect_create(parent,
-		theme->border_width, height, color);
+		theme->border_width, side_height, color);
 	wlr_scene_node_set_position(&ssd->border.left->node, 0, 0);
 	ssd->border.right = lab_wlr_scene_rect_create(parent,
-		theme->border_width, height, color);
+		theme->border_width, side_height, color);
 	wlr_scene_node_set_position(&ssd->border.right->node,
 		theme->border_width + width, 0);
 	ssd->border.bottom = lab_wlr_scene_rect_create(parent,
-		full_width, theme->border_width, color);
+		bottom_width, theme->border_width, color);
 	wlr_scene_node_set_position(&ssd->border.bottom->node,
-		0, height);
+		bottom_x, height);
 	ssd->border.top = lab_wlr_scene_rect_create(parent,
 		MAX(width - 2 * corner_width, 0), theme->border_width, color);
 	wlr_scene_node_set_position(&ssd->border.top->node,
 		theme->border_width + corner_width,
 		-(ssd->titlebar.height + theme->border_width));
+	ssd->border.corner_tree = lab_wlr_scene_tree_create(view->scene_tree);
+	wlr_scene_node_set_position(&ssd->border.corner_tree->node,
+		-theme->border_width, 0);
+	wlr_scene_node_raise_to_top(&ssd->border.corner_tree->node);
+	ssd->border.corner_left = lab_wlr_scene_buffer_create(
+		ssd->border.corner_tree,
+		&theme->window.corner_bottom_left_normal->base);
+	wlr_scene_node_set_position(&ssd->border.corner_left->node,
+		0, corner_y);
+	wlr_scene_node_set_enabled(&ssd->border.corner_left->node, rounded);
+	ssd->border.corner_right = lab_wlr_scene_buffer_create(
+		ssd->border.corner_tree,
+		&theme->window.corner_bottom_right_normal->base);
+	wlr_scene_node_set_position(&ssd->border.corner_right->node,
+		theme->border_width + width - corner_width, corner_y);
+	wlr_scene_node_set_enabled(&ssd->border.corner_right->node, rounded);
+	jtlabwc_buffer_set_no_input(ssd->border.corner_left);
+	jtlabwc_buffer_set_no_input(ssd->border.corner_right);
 	if (view->maximized == VIEW_AXIS_BOTH) {
 		wlr_scene_node_set_enabled(&ssd->border.tree->node, false);
+		wlr_scene_node_set_enabled(&ssd->border.corner_tree->node, false);
 	}
 	if (view->current.width > 0 && view->current.height > 0) {
 		ssd_border_update(ssd);
@@ -11492,12 +11668,18 @@ ssd_border_update(struct ssd *ssd)
 	if (view->maximized == VIEW_AXIS_BOTH
 			&& ssd->border.tree->node.enabled) {
 		wlr_scene_node_set_enabled(&ssd->border.tree->node, false);
+		if (ssd->border.corner_tree) {
+			wlr_scene_node_set_enabled(&ssd->border.corner_tree->node, false);
+		}
 		ssd->margin = ssd_thickness(ssd->view);
 	}
 	if (view->maximized == VIEW_AXIS_BOTH) {
 		return;
 	} else if (!ssd->border.tree->node.enabled) {
 		wlr_scene_node_set_enabled(&ssd->border.tree->node, true);
+		if (ssd->border.corner_tree) {
+			wlr_scene_node_set_enabled(&ssd->border.corner_tree->node, true);
+		}
 		ssd->margin = ssd_thickness(ssd->view);
 	}
 	struct theme *theme = rc.theme;
@@ -11505,12 +11687,19 @@ ssd_border_update(struct ssd *ssd)
 	int height = view_effective_height(view,   false);
 	int full_width = width + 2 * theme->border_width;
 	int corner_width = ssd_get_corner_width();
+	bool rounded = !ssd->state.was_squared;
 	int side_height = ssd->state.was_squared
 		? height + ssd->titlebar.height
 		: height;
+	if (rounded) {
+		side_height = MAX(side_height - corner_width, 0);
+	}
 	int side_y = ssd->state.was_squared
 		? -ssd->titlebar.height
 		: 0;
+	int bottom_width = rounded
+		? MAX(width - 2 * corner_width, 0) : full_width;
+	int bottom_x = rounded ? theme->border_width + corner_width : 0;
 	int top_width = ssd->titlebar.height <= 0 || ssd->state.was_squared
 		? full_width
 		: MAX(width - 2 * corner_width, 0);
@@ -11526,19 +11715,31 @@ ssd_border_update(struct ssd *ssd)
 	wlr_scene_node_set_position(&ssd->border.right->node,
 		theme->border_width + width, side_y);
 	wlr_scene_rect_set_size(ssd->border.bottom,
-		full_width, theme->border_width);
+		bottom_width, theme->border_width);
 	wlr_scene_node_set_position(&ssd->border.bottom->node,
-		0, height);
+		bottom_x, height);
 	wlr_scene_rect_set_size(ssd->border.top,
 		top_width, theme->border_width);
 	wlr_scene_node_set_position(&ssd->border.top->node,
 		top_x, -(ssd->titlebar.height + theme->border_width));
+	if (ssd->border.corner_left && ssd->border.corner_right) {
+		int corner_y = height - corner_width;
+		wlr_scene_node_set_position(&ssd->border.corner_left->node,
+			0, corner_y);
+		wlr_scene_node_set_position(&ssd->border.corner_right->node,
+			theme->border_width + width - corner_width, corner_y);
+		wlr_scene_node_set_enabled(&ssd->border.corner_left->node, rounded);
+		wlr_scene_node_set_enabled(&ssd->border.corner_right->node, rounded);
+	}
 }
 void
 ssd_border_destroy(struct ssd *ssd)
 {
 	assert(ssd);
 	assert(ssd->border.tree);
+	if (ssd->border.corner_tree) {
+		wlr_scene_node_destroy(&ssd->border.corner_tree->node);
+	}
 	wlr_scene_node_destroy(&ssd->border.tree->node);
 	ssd->border = (struct ssd_border_scene){0};
 }
@@ -12061,12 +12262,37 @@ ssd_get_resizing_type(const struct ssd *ssd, struct wlr_cursor *cursor)
 	}
 	return LAB_NODE_NONE;
 }
+/* SSD rounding is bottom-only: the titlebar already covers the top corners.
+ * The clip radius is the inner edge of the border arc, i.e. the theme radius
+ * minus the border thickness.  Using the raw radius pushed the client edge
+ * one pixel into the border. */
+static int
+ssd_client_round_radius(struct ssd *ssd)
+{
+	struct view *view = ssd->view;
+	if (view->type != LAB_XDG_SHELL_VIEW
+			|| view->ssd_mode != LAB_SSD_MODE_FULL
+			|| !view_titlebar_visible(view)
+			|| view->fullscreen
+			|| view->maximized == VIEW_AXIS_BOTH
+			|| ssd_should_be_squared(ssd)) {
+		return 0;
+	}
+	return MAX(0, rc.corner_radius - rc.theme->border_width);
+}
+static void
+ssd_update_client_rounding(struct ssd *ssd)
+{
+	jtlabwc_view_set_client_rounding(ssd->view,
+		ssd_client_round_radius(ssd), WLR_SCENE_CORNER_BOTTOM);
+}
 struct ssd *
 ssd_create(struct view *view, bool active)
 {
 	assert(view);
 	struct ssd *ssd = znew(*ssd);
 	ssd->view = view;
+	ssd->border_anim.view = view;
 	ssd->tree = lab_wlr_scene_tree_create(view->scene_tree);
 	node_descriptor_create(&ssd->tree->node,
 		LAB_NODE_SSD_ROOT, view,   NULL);
@@ -12075,6 +12301,8 @@ ssd_create(struct view *view, bool active)
 	ssd_extents_create(ssd);
 	ssd_titlebar_create(ssd);
 	ssd_border_create(ssd);
+	ssd->border_anim.frame_tree = ssd->border.tree;
+	ssd->border_anim.top_offset = ssd->titlebar.height;
 	if (!view_titlebar_visible(view)) {
 		ssd_set_titlebar(ssd, false);
 	}
@@ -12082,6 +12310,7 @@ ssd_create(struct view *view, bool active)
 	ssd_set_active(ssd, active);
 	ssd_enable_keybind_inhibit_indicator(ssd, view->inhibits_keybinds);
 	ssd->state.geometry = view->current;
+	ssd_update_client_rounding(ssd);
 	return ssd;
 }
 struct border
@@ -12133,6 +12362,7 @@ ssd_update_geometry(struct ssd *ssd)
 	if (update_extents) {
 		ssd->state.geometry = current;
 	}
+	ssd_update_client_rounding(ssd);
 }
 void
 ssd_set_titlebar(struct ssd *ssd, bool enabled)
@@ -12142,9 +12372,11 @@ ssd_set_titlebar(struct ssd *ssd, bool enabled)
 	}
 	wlr_scene_node_set_enabled(&ssd->titlebar.tree->node, enabled);
 	ssd->titlebar.height = enabled ? rc.theme->titlebar_height : 0;
+	ssd->border_anim.top_offset = ssd->titlebar.height;
 	ssd_border_update(ssd);
 	ssd_extents_update(ssd);
 	ssd->margin = ssd_thickness(ssd->view);
+	ssd_update_client_rounding(ssd);
 }
 void
 ssd_destroy(struct ssd *ssd)
@@ -12153,10 +12385,12 @@ ssd_destroy(struct ssd *ssd)
 		return;
 	}
 	struct view *view = ssd->view;
+	jtlabwc_view_set_client_rounding(view, 0, 0);
 	if (server.hovered_button && node_view_from_node(
 			server.hovered_button->node) == view) {
 		server.hovered_button = NULL;
 	}
+	jtlabwc_border_anim_stop(&ssd->border_anim);
 	ssd_titlebar_destroy(ssd);
 	ssd_border_destroy(ssd);
 	ssd_extents_destroy(ssd);
@@ -12196,12 +12430,18 @@ ssd_set_active(struct ssd *ssd, bool active)
 	if (!ssd) {
 		return;
 	}
+	bool was_active = ssd->active;
 	ssd->active = active;
 	if (ssd->titlebar.accent_line) {
 		wlr_scene_node_set_enabled(
 			&ssd->titlebar.accent_line->node, active);
 	}
 	ssd_update_top_border_color(ssd);
+	if (!active) {
+		jtlabwc_border_anim_stop(&ssd->border_anim);
+	} else if (!was_active && ssd->view->type == LAB_XDG_SHELL_VIEW) {
+		jtlabwc_border_anim_start(&ssd->border_anim);
+	}
 }
 void
 ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable)
@@ -12256,7 +12496,9 @@ struct LABWC_src_theme_c_button {
 };
 enum LABWC_src_theme_c_rounded_corner {
 	ROUNDED_CORNER_TOP_LEFT,
-	ROUNDED_CORNER_TOP_RIGHT
+	ROUNDED_CORNER_TOP_RIGHT,
+	ROUNDED_CORNER_BOTTOM_LEFT,
+	ROUNDED_CORNER_BOTTOM_RIGHT
 };
 struct LABWC_src_theme_c_rounded_corner_ctx {
 	struct wlr_box *box;
@@ -12571,10 +12813,69 @@ LABWC_src_theme_c_rounded_rect(struct LABWC_src_theme_c_rounded_corner_ctx *ctx)
 	double r = ctx->radius;
 	struct lab_data_buffer *buffer;
 	buffer = buffer_create_cairo((uint32_t)w, (uint32_t)h, 1);
+	if (!buffer) {
+		return NULL;
+	}
 	cairo_surface_t *surf = buffer->surface;
 	cairo_t *cairo = cairo_create(surf);
 	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
 	cairo_paint(cairo);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
+
+	/* Bottom corners only contribute the border arc; the client surface
+	 * behind them stays visible. */
+	if (ctx->corner == ROUNDED_CORNER_BOTTOM_LEFT
+			|| ctx->corner == ROUNDED_CORNER_BOTTOM_RIGHT) {
+		double line_width = ctx->line_width;
+		double half_line_width = line_width / 2.0;
+		double centre_y = h - r;
+		double arc_width = MIN(line_width, r);
+		double arc_radius = r - arc_width / 2.0;
+		set_cairo_color(cairo, ctx->border_color);
+		cairo_set_line_cap(cairo, CAIRO_LINE_CAP_BUTT);
+		cairo_set_line_width(cairo, line_width);
+		if (ctx->corner == ROUNDED_CORNER_BOTTOM_LEFT) {
+			if (r > 0) {
+				cairo_move_to(cairo, half_line_width, 0);
+				cairo_line_to(cairo, half_line_width, centre_y);
+				cairo_move_to(cairo, r, h - half_line_width);
+				cairo_line_to(cairo, w, h - half_line_width);
+			} else {
+				cairo_move_to(cairo, half_line_width, 0);
+				cairo_line_to(cairo, half_line_width, h - half_line_width);
+				cairo_line_to(cairo, w, h - half_line_width);
+			}
+		} else {
+			if (r > 0) {
+				cairo_move_to(cairo, 0, h - half_line_width);
+				cairo_line_to(cairo, w - r, h - half_line_width);
+				cairo_move_to(cairo, w - half_line_width, 0);
+				cairo_line_to(cairo, w - half_line_width, centre_y);
+			} else {
+				cairo_move_to(cairo, 0, h - half_line_width);
+				cairo_line_to(cairo, w - half_line_width, h - half_line_width);
+				cairo_line_to(cairo, w - half_line_width, 0);
+			}
+		}
+		cairo_stroke(cairo);
+		if (r > 0 && arc_radius > 0) {
+			cairo_set_line_width(cairo, arc_width);
+			if (ctx->corner == ROUNDED_CORNER_BOTTOM_LEFT) {
+				cairo_move_to(cairo, arc_width / 2.0, centre_y);
+				cairo_arc_negative(cairo, r, centre_y, arc_radius,
+					180 * LABWC_src_theme_c_deg, 90 * LABWC_src_theme_c_deg);
+			} else {
+				cairo_move_to(cairo, w - r, h - half_line_width);
+				cairo_arc_negative(cairo, w - r, centre_y, arc_radius,
+					90 * LABWC_src_theme_c_deg, 0 * LABWC_src_theme_c_deg);
+			}
+			cairo_stroke(cairo);
+		}
+		cairo_surface_flush(surf);
+		cairo_destroy(cairo);
+		return buffer;
+	}
+
 	cairo_set_line_width(cairo, 0.0);
 	cairo_new_sub_path(cairo);
 	switch (ctx->corner) {
@@ -12590,9 +12891,10 @@ LABWC_src_theme_c_rounded_rect(struct LABWC_src_theme_c_rounded_corner_ctx *ctx)
 		cairo_line_to(cairo, 0, h);
 		cairo_line_to(cairo, 0, 0);
 		break;
+	default:
+		break;
 	}
 	cairo_close_path(cairo);
-	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
 	cairo_matrix_t matrix;
 	cairo_matrix_init_translate(&matrix, 0, -ctx->line_width);
 	cairo_pattern_set_matrix(ctx->fill_pattern, &matrix);
@@ -12618,6 +12920,8 @@ LABWC_src_theme_c_rounded_rect(struct LABWC_src_theme_c_rounded_corner_ctx *ctx)
 		cairo_move_to(cairo, w - half_line_width, r);
 		cairo_line_to(cairo, w - half_line_width, h);
 		break;
+	default:
+		break;
 	}
 	cairo_stroke(cairo);
 	if (!r) {
@@ -12634,6 +12938,8 @@ LABWC_src_theme_c_rounded_rect(struct LABWC_src_theme_c_rounded_corner_ctx *ctx)
 	case ROUNDED_CORNER_TOP_RIGHT:
 		cairo_move_to(cairo, w - r, half_line_width);
 		cairo_arc(cairo, w - r, r, r - half_line_width, -90 * LABWC_src_theme_c_deg, 0 * LABWC_src_theme_c_deg);
+		break;
+	default:
 		break;
 	}
 	cairo_stroke(cairo);
@@ -12725,6 +13031,16 @@ LABWC_src_theme_c_create_corners(struct theme *theme)
 		LABWC_src_theme_c_rounded_rect(&ctx);
 	ctx.corner = ROUNDED_CORNER_TOP_RIGHT;
 	theme->window.corner_top_right_normal =
+		LABWC_src_theme_c_rounded_rect(&ctx);
+	box.width = corner_width + theme->border_width;
+	box.height = corner_width + theme->border_width;
+	ctx.box = &box;
+	ctx.fill_pattern = NULL;
+	ctx.corner = ROUNDED_CORNER_BOTTOM_LEFT;
+	theme->window.corner_bottom_left_normal =
+		LABWC_src_theme_c_rounded_rect(&ctx);
+	ctx.corner = ROUNDED_CORNER_BOTTOM_RIGHT;
+	theme->window.corner_bottom_right_normal =
 		LABWC_src_theme_c_rounded_rect(&ctx);
 }
 static void
@@ -12858,6 +13174,8 @@ theme_finish(struct theme *theme)
 	LABWC_src_theme_c_zdrop(&theme->window.titlebar_fill);
 	LABWC_src_theme_c_zdrop(&theme->window.corner_top_left_normal);
 	LABWC_src_theme_c_zdrop(&theme->window.corner_top_right_normal);
+	LABWC_src_theme_c_zdrop(&theme->window.corner_bottom_left_normal);
+	LABWC_src_theme_c_zdrop(&theme->window.corner_bottom_right_normal);
 }
 #undef zero_array
 #define JTLABWC_CONTROL_SOCKET "jtlabwc-ctl.sock"
@@ -12963,6 +13281,620 @@ jtlabwc_accent_line_color(float out[4])
 	}
 	jtlabwc_control_apply_color(out, &jtlabwc_accent_color);
 }
+
+/* Only the rounded corners need a Cairo buffer.  The straight edges are
+ * scene rects, so resizing a CSD window no longer allocates a window-sized
+ * mostly-transparent frame buffer for every view.  corner 0..3 is
+ * top-left, top-right, bottom-left, bottom-right. */
+static struct lab_data_buffer *
+jtlabwc_csd_corner_buffer(int thickness, int radius, int corner,
+		const float color[4])
+{
+	int size = radius + thickness;
+	if (size <= 0) {
+		return NULL;
+	}
+	struct lab_data_buffer *buffer = buffer_create_cairo(
+		(uint32_t)size, (uint32_t)size, 1);
+	if (!buffer) {
+		return NULL;
+	}
+	cairo_t *cairo = cairo_create(buffer->surface);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cairo);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
+
+	double arc_radius = (double)radius - (double)thickness / 2.0;
+	if (arc_radius <= 0.0) {
+		/* Radius is too small for a real arc: fill only the square
+		 * thickness-by-thickness patch at this corner, not the whole
+		 * (radius + thickness) buffer, or it bleeds into the client. */
+		double x = (corner == 1 || corner == 3) ? (double)radius : 0.0;
+		double y = (corner == 2 || corner == 3) ? (double)radius : 0.0;
+		cairo_rectangle(cairo, x, y,
+			(double)thickness, (double)thickness);
+		set_cairo_color(cairo, color);
+		cairo_fill(cairo);
+		cairo_surface_flush(buffer->surface);
+		cairo_destroy(cairo);
+		return buffer;
+	}
+
+	double cx = (corner == 0 || corner == 2)
+		? (double)radius : (double)thickness;
+	double cy = (corner == 0 || corner == 1)
+		? (double)radius : (double)thickness;
+	const double deg = 0.017453292519943295;
+
+	/* Stroke the edge centre-lines into the arc, not through its centre;
+	 * otherwise the square stubs bleed across the rounded corner. */
+	cairo_new_path(cairo);
+	switch (corner) {
+	case 0: /* top-left */
+		cairo_move_to(cairo, cx - arc_radius, (double)size);
+		cairo_line_to(cairo, cx - arc_radius, cy);
+		cairo_arc(cairo, cx, cy, arc_radius,
+			180 * deg, 270 * deg);
+		cairo_line_to(cairo, (double)size, cy - arc_radius);
+		break;
+	case 1: /* top-right */
+		cairo_move_to(cairo, 0.0, cy - arc_radius);
+		cairo_line_to(cairo, cx, cy - arc_radius);
+		cairo_arc(cairo, cx, cy, arc_radius,
+			-90 * deg, 0 * deg);
+		cairo_line_to(cairo, cx + arc_radius, (double)size);
+		break;
+	case 2: /* bottom-left */
+		cairo_move_to(cairo, (double)size, cy + arc_radius);
+		cairo_line_to(cairo, cx, cy + arc_radius);
+		cairo_arc(cairo, cx, cy, arc_radius,
+			90 * deg, 180 * deg);
+		cairo_line_to(cairo, cx - arc_radius, 0.0);
+		break;
+	default: /* bottom-right */
+		cairo_move_to(cairo, cx + arc_radius, 0.0);
+		cairo_line_to(cairo, cx + arc_radius, cy);
+		cairo_arc(cairo, cx, cy, arc_radius,
+			0 * deg, 90 * deg);
+		cairo_line_to(cairo, 0.0, cy + arc_radius);
+		break;
+	}
+	set_cairo_color(cairo, color);
+	cairo_set_line_width(cairo, (double)thickness);
+	cairo_set_line_cap(cairo, CAIRO_LINE_CAP_BUTT);
+	cairo_stroke(cairo);
+	cairo_surface_flush(buffer->surface);
+	cairo_destroy(cairo);
+	return buffer;
+}
+void
+jtlabwc_view_border_create(struct view *view)
+{
+	struct jtlabwc_view_border *border = &view->border;
+	if (border->tree || !view->scene_tree) {
+		return;
+	}
+	border->tree = lab_wlr_scene_tree_create(view->scene_tree);
+	wlr_scene_node_raise_to_top(&border->tree->node);
+	border->top = lab_wlr_scene_buffer_create(border->tree, NULL);
+	border->bottom = lab_wlr_scene_buffer_create(border->tree, NULL);
+	border->left = lab_wlr_scene_buffer_create(border->tree, NULL);
+	border->right = lab_wlr_scene_buffer_create(border->tree, NULL);
+	jtlabwc_buffer_set_no_input(border->top);
+	jtlabwc_buffer_set_no_input(border->bottom);
+	jtlabwc_buffer_set_no_input(border->left);
+	jtlabwc_buffer_set_no_input(border->right);
+	border->anim.view = view;
+	border->anim.frame_tree = border->tree;
+	wlr_scene_node_set_enabled(&border->tree->node, false);
+}
+void
+jtlabwc_view_border_destroy(struct view *view)
+{
+	struct jtlabwc_view_border *border = &view->border;
+	jtlabwc_border_anim_stop(&border->anim);
+	jtlabwc_view_set_csd_clip(view, false);
+	jtlabwc_view_set_client_rounding(view, 0, 0);
+	if (border->tree) {
+		wlr_scene_node_destroy(&border->tree->node);
+	}
+	memset(border, 0, sizeof(*border));
+}
+void
+jtlabwc_view_border_update(struct view *view)
+{
+	struct jtlabwc_view_border *border = &view->border;
+	if (!border->tree || !rc.theme) {
+		return;
+	}
+	int width = view->current.width;
+	int height = view_effective_height(view, false);
+	bool visible = view->type == LAB_XDG_SHELL_VIEW
+		&& view->mapped
+		&& !view->minimized
+		&& !view->fullscreen
+		&& view->ssd_mode == LAB_SSD_MODE_NONE
+		&& width > 0 && height > 0;
+	wlr_scene_node_set_enabled(&border->tree->node, visible);
+	if (!visible) {
+		jtlabwc_border_anim_stop(&border->anim);
+		jtlabwc_view_set_csd_clip(view, false);
+		if (view->type == LAB_XDG_SHELL_VIEW
+				&& view->ssd_mode == LAB_SSD_MODE_NONE) {
+			jtlabwc_view_set_client_rounding(view, 0, 0);
+		}
+		return;
+	}
+	int thickness = rc.theme->border_width;
+	int radius = MIN(MAX(0, rc.corner_radius), MIN(width, height) / 2);
+	/* CSD path: crop to the XDG window geometry first, then round the inner
+	 * edge of the compositor-drawn frame. */
+	jtlabwc_view_set_csd_clip(view, true);
+	jtlabwc_view_set_client_rounding(view,
+		MAX(0, radius - thickness), WLR_SCENE_CORNER_ALL);
+	if (thickness <= 0) {
+		wlr_scene_node_set_enabled(&border->tree->node, false);
+		jtlabwc_border_anim_stop(&border->anim);
+		jtlabwc_view_set_csd_clip(view, false);
+		jtlabwc_view_set_client_rounding(view, 0, 0);
+		return;
+	}
+	float color[4];
+	memcpy(color, rc.theme->window.border_color, sizeof(color));
+	if (!border->frame_valid
+			|| thickness != border->frame_thickness
+			|| radius != border->frame_radius
+			|| memcmp(color, border->frame_color, sizeof(color)) != 0) {
+		struct lab_data_buffer *edge =
+			jtlabwc_solid_color_buffer(color);
+		if (!edge) {
+			return;
+		}
+		wlr_scene_buffer_set_buffer(border->top, &edge->base);
+		wlr_scene_buffer_set_buffer(border->bottom, &edge->base);
+		wlr_scene_buffer_set_buffer(border->left, &edge->base);
+		wlr_scene_buffer_set_buffer(border->right, &edge->base);
+		wlr_buffer_drop(&edge->base);
+		bool ok = true;
+		for (int i = 0; i < 4; i++) {
+			struct lab_data_buffer *buffer =
+				jtlabwc_csd_corner_buffer(thickness, radius, i, color);
+			if (!buffer) {
+				ok = false;
+				break;
+			}
+			if (!border->corner[i]) {
+				border->corner[i] = lab_wlr_scene_buffer_create(
+					border->tree, &buffer->base);
+			} else {
+				wlr_scene_buffer_set_buffer(
+					border->corner[i], &buffer->base);
+			}
+			wlr_buffer_drop(&buffer->base);
+			if (!border->corner[i]) {
+				ok = false;
+				break;
+			}
+			jtlabwc_buffer_set_no_input(border->corner[i]);
+			wlr_scene_node_raise_to_top(&border->corner[i]->node);
+		}
+		if (!ok) {
+			return;
+		}
+		memcpy(border->frame_color, color, sizeof(border->frame_color));
+		border->frame_thickness = thickness;
+		border->frame_radius = radius;
+		border->frame_valid = true;
+	}
+
+	int straight_width = MAX(0, width - 2 * radius);
+	int straight_height = MAX(0, height - 2 * radius);
+	wlr_scene_buffer_set_dest_size(border->top, straight_width, thickness);
+	wlr_scene_node_set_position(&border->top->node, radius, -thickness);
+	wlr_scene_buffer_set_dest_size(border->bottom, straight_width, thickness);
+	wlr_scene_node_set_position(&border->bottom->node, radius, height);
+	/* Stop at the arc endpoints; the corner buffers own the curved part. */
+	wlr_scene_buffer_set_dest_size(border->left,
+		thickness, straight_height + thickness);
+	wlr_scene_node_set_position(&border->left->node,
+		-thickness, radius - thickness);
+	wlr_scene_buffer_set_dest_size(border->right,
+		thickness, straight_height + thickness);
+	wlr_scene_node_set_position(&border->right->node,
+		width, radius - thickness);
+
+	wlr_scene_node_set_position(&border->corner[0]->node,
+		-thickness, -thickness);
+	wlr_scene_node_set_position(&border->corner[1]->node,
+		width - radius, -thickness);
+	wlr_scene_node_set_position(&border->corner[2]->node,
+		-thickness, height - radius);
+	wlr_scene_node_set_position(&border->corner[3]->node,
+		width - radius, height - radius);
+}
+void
+jtlabwc_view_border_set_active(struct view *view, bool active)
+{
+	struct jtlabwc_view_border *border = &view->border;
+	bool was_active = border->active;
+	if (was_active == active) {
+		return;
+	}
+	border->active = active;
+	jtlabwc_view_border_update(view);
+	if (!active) {
+		jtlabwc_border_anim_stop(&border->anim);
+	} else if (!was_active) {
+		jtlabwc_border_anim_start(&border->anim);
+	}
+}
+
+/* One-shot accent border animation.  Two halves start together at the bottom
+ * centre, follow the rounded frame in opposite directions, meet at the top
+ * centre, then compress away.  Both SSD and CSD XDG toplevels use it. */
+#define JTLABWC_APPEARANCE_CONFIG "appearance.conf"
+#define JTLABWC_BORDER_ANIM_TICK_MS 16
+#define JTLABWC_BORDER_ANIM_DURATION_MS 900
+#define JTLABWC_BORDER_ANIM_FADE 0.08f
+#define JTLABWC_BORDER_ANIM_TRAVEL 0.80f
+#define JTLABWC_BORDER_ANIM_IMPACT_HOLD 0.25f
+/* Two crisp 4px segments, not a full-size Cairo stroke. */
+#define JTLABWC_BORDER_ANIM_THICKNESS 4
+
+static bool
+jtlabwc_config_bool(const char *value, bool fallback)
+{
+	if (!strcasecmp(value, "true")) {
+		return true;
+	}
+	if (!strcasecmp(value, "false")) {
+		return false;
+	}
+	return fallback;
+}
+
+static void
+jtlabwc_border_anim_stop(struct jtlabwc_border_anim *anim)
+{
+	if (!anim) {
+		return;
+	}
+	anim->running = false;
+	anim->elapsed_ms = 0;
+	if (anim->tree) {
+		wlr_scene_node_destroy(&anim->tree->node);
+		anim->tree = NULL;
+		anim->seg[0] = NULL;
+		anim->seg[1] = NULL;
+	}
+}
+
+static bool
+jtlabwc_border_anim_step(struct jtlabwc_border_anim *anim)
+{
+	if (!anim || !anim->running || !anim->tree || !rc.theme
+			|| !anim->view || !anim->view->scene_tree) {
+		return false;
+	}
+	if (anim->view->fullscreen || anim->view->maximized == VIEW_AXIS_BOTH
+			|| !anim->frame_tree || !anim->frame_tree->node.enabled) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
+	}
+	if (jtlabwc_border_anim_is_csd(anim)) {
+		if (!anim->view->mapped || !anim->view->scene_tree->node.enabled) {
+			jtlabwc_border_anim_stop(anim);
+			return false;
+		}
+		struct wlr_scene_tree *parent =
+			jtlabwc_border_anim_csd_parent(anim);
+		if (parent && anim->tree->node.parent != parent) {
+			wlr_scene_node_reparent(&anim->tree->node, parent);
+		}
+		/* The tree is a sibling of view->scene_tree, so follow it in
+		 * absolute scene coordinates on every tick. */
+		wlr_scene_node_set_position(&anim->tree->node,
+			anim->view->current.x, anim->view->current.y);
+		wlr_scene_node_raise_to_top(&anim->tree->node);
+	}
+
+	anim->elapsed_ms += JTLABWC_BORDER_ANIM_TICK_MS;
+	float progress = (float)anim->elapsed_ms
+		/ (float)JTLABWC_BORDER_ANIM_DURATION_MS;
+	if (progress >= 1.0f) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
+	}
+
+	int border = MAX(1, rc.theme->border_width);
+	int thickness = JTLABWC_BORDER_ANIM_THICKNESS;
+	/* Centre the 4px stroke inside the border instead of pinning it to the
+	 * outer edge when the theme border is thicker. */
+	int inset = MAX(0, (border - thickness) / 2);
+	int content_height = view_effective_height(anim->view, false);
+	int left = -border;
+	int right = anim->view->current.width + border;
+	int top = -(anim->top_offset + border);
+	int bottom = content_height + border;
+	int frame_width = right - left;
+	int frame_height = bottom - top;
+	int max_seg = MIN(frame_width - 2 * thickness,
+		frame_height - 2 * thickness);
+	if (max_seg < 2) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
+	}
+
+	int perimeter = 2 * (frame_width + frame_height);
+	int seg = MAX(2, MIN(64, MAX(12, perimeter / 12)));
+	seg = MIN(seg, max_seg);
+	int bottom_half = (frame_width - seg) / 2;
+	int side_length = frame_height - seg;
+	int travel_total = 2 * bottom_half + side_length;
+	if (bottom_half < 1 || side_length < 1 || travel_total < 1) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
+	}
+
+	int centre_x = (left + right) / 2;
+	int left_edge = left + inset;
+	int right_edge = right - border + inset;
+	int top_edge = top + inset;
+	int bottom_edge = bottom - border + inset;
+	int x[2] = { centre_x - seg / 2, centre_x - seg / 2 };
+	int y[2] = { bottom_edge, bottom_edge };
+	int w[2] = { seg, seg };
+	int h[2] = { thickness, thickness };
+
+	float travel_progress = progress / JTLABWC_BORDER_ANIM_TRAVEL;
+	if (travel_progress > 1.0f) {
+		travel_progress = 1.0f;
+	}
+	float travelled = travel_progress * (float)travel_total;
+	if (travelled < (float)bottom_half) {
+		/* Both halves leave the bottom centre in opposite directions. */
+		int offset = (int)travelled;
+		x[0] = centre_x - seg / 2 - offset;
+		x[1] = centre_x - seg / 2 + offset;
+	} else if (travelled < (float)(bottom_half + side_length)) {
+		/* Up the left and right edges. */
+		int offset = (int)(travelled - (float)bottom_half);
+		x[0] = left_edge;
+		x[1] = right_edge;
+		y[0] = y[1] = bottom_edge - seg - offset;
+		w[0] = w[1] = thickness;
+		h[0] = h[1] = seg;
+	} else {
+		/* In along the top edge towards the centre. */
+		int offset = (int)(travelled - (float)(bottom_half + side_length));
+		x[0] = left + offset;
+		x[1] = right - seg - offset;
+		y[0] = y[1] = top_edge;
+	}
+
+	float collapse = 0.0f;
+	if (progress >= JTLABWC_BORDER_ANIM_TRAVEL) {
+		float impact = (progress - JTLABWC_BORDER_ANIM_TRAVEL)
+			/ (1.0f - JTLABWC_BORDER_ANIM_TRAVEL);
+		collapse = (impact - JTLABWC_BORDER_ANIM_IMPACT_HOLD)
+			/ (1.0f - JTLABWC_BORDER_ANIM_IMPACT_HOLD);
+		if (collapse < 0.0f) {
+			collapse = 0.0f;
+		} else if (collapse > 1.0f) {
+			collapse = 1.0f;
+		}
+		int hit_width = MAX(1, (int)((float)seg * (1.0f - collapse)));
+		x[0] = x[1] = centre_x - hit_width / 2;
+		y[0] = y[1] = top_edge;
+		w[0] = w[1] = hit_width;
+		h[0] = h[1] = thickness;
+	}
+
+	float alpha = 1.0f;
+	if (progress < JTLABWC_BORDER_ANIM_FADE) {
+		alpha = progress / JTLABWC_BORDER_ANIM_FADE;
+	}
+	alpha *= 1.0f - collapse;
+	float color[4];
+	jtlabwc_accent_line_color(color);
+	for (int i = 0; i < 4; i++) {
+		color[i] *= alpha;
+	}
+
+	/* A new 1x1 buffer each tick gives the renderer a fresh texture; the old
+	 * two scene locks are released as soon as both segments are replaced. */
+	struct lab_data_buffer *buffer = jtlabwc_solid_color_buffer(color);
+	if (!buffer) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
+	}
+	for (int i = 0; i < 2; i++) {
+		if (!anim->seg[i]) {
+			anim->seg[i] = lab_wlr_scene_buffer_create(
+				anim->tree, &buffer->base);
+			jtlabwc_buffer_set_no_input(anim->seg[i]);
+		} else {
+			wlr_scene_buffer_set_buffer(anim->seg[i], &buffer->base);
+		}
+		wlr_scene_buffer_set_dest_size(anim->seg[i], w[i], h[i]);
+		wlr_scene_node_set_position(&anim->seg[i]->node, x[i], y[i]);
+	}
+	wlr_buffer_drop(&buffer->base);
+	wlr_scene_node_raise_to_top(&anim->tree->node);
+	return true;
+}
+
+static int
+jtlabwc_border_anim_tick(void *data)
+{
+	(void)data;
+	bool any = false;
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		if (jtlabwc_border_anim_step(&view->border.anim)) {
+			any = true;
+		}
+		if (view->ssd && jtlabwc_border_anim_step(&view->ssd->border_anim)) {
+			any = true;
+		}
+	}
+	if (!any && jtlabwc_border_anim_timer) {
+		wl_event_source_remove(jtlabwc_border_anim_timer);
+		jtlabwc_border_anim_timer = NULL;
+		return 0;
+	}
+	/* Timer sources are not re-armed by the callback return value. */
+	if (jtlabwc_border_anim_timer) {
+		wl_event_source_timer_update(jtlabwc_border_anim_timer,
+			JTLABWC_BORDER_ANIM_TICK_MS);
+	}
+	return 0;
+}
+
+static bool
+jtlabwc_border_anim_is_csd(struct jtlabwc_border_anim *anim)
+{
+	return anim && anim->view && &anim->view->border.anim == anim;
+}
+
+static struct wlr_scene_tree *
+jtlabwc_border_anim_csd_parent(struct jtlabwc_border_anim *anim)
+{
+	if (!anim || !anim->view || !anim->view->scene_tree
+			|| !anim->view->scene_tree->node.parent) {
+		return NULL;
+	}
+	return anim->view->scene_tree->node.parent;
+}
+
+static void
+jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim)
+{
+	if (!jtlabwc_border_anim_enabled || !anim || !anim->frame_tree
+			|| !anim->view || !anim->view->scene_tree || !rc.theme
+			|| anim->view->fullscreen
+			|| anim->view->maximized == VIEW_AXIS_BOTH
+			|| !anim->frame_tree->node.enabled) {
+		return;
+	}
+	struct wlr_scene_tree *parent = anim->view->scene_tree;
+	bool csd = jtlabwc_border_anim_is_csd(anim);
+	struct wlr_scene_tree *csd_parent =
+		csd ? jtlabwc_border_anim_csd_parent(anim) : NULL;
+	if (csd_parent) {
+		parent = csd_parent;
+	}
+	if (!anim->tree) {
+		/* CSD: sit above the whole view tree so the permanent frame can
+		 * never cover the accent halves. */
+		anim->tree = lab_wlr_scene_tree_create(parent);
+	} else if (anim->tree->node.parent != parent) {
+		wlr_scene_node_reparent(&anim->tree->node, parent);
+	}
+	if (csd) {
+		wlr_scene_node_set_position(&anim->tree->node,
+			anim->view->current.x, anim->view->current.y);
+	}
+	wlr_scene_node_raise_to_top(&anim->tree->node);
+	anim->running = true;
+	anim->elapsed_ms = 0;
+	jtlabwc_border_anim_step(anim);
+	if (!anim->running) {
+		return;
+	}
+	if (!jtlabwc_border_anim_timer && server.wl_event_loop) {
+		jtlabwc_border_anim_timer = wl_event_loop_add_timer(
+			server.wl_event_loop, jtlabwc_border_anim_tick, NULL);
+	}
+	if (jtlabwc_border_anim_timer) {
+		wl_event_source_timer_update(jtlabwc_border_anim_timer,
+			JTLABWC_BORDER_ANIM_TICK_MS);
+	}
+}
+
+static void
+jtlabwc_border_anim_finish(void)
+{
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		jtlabwc_border_anim_stop(&view->border.anim);
+		if (view->ssd) {
+			jtlabwc_border_anim_stop(&view->ssd->border_anim);
+		}
+	}
+	if (jtlabwc_border_anim_timer) {
+		wl_event_source_remove(jtlabwc_border_anim_timer);
+		jtlabwc_border_anim_timer = NULL;
+	}
+}
+
+static void
+jtlabwc_appearance_config_load(void)
+{
+	jtlabwc_border_anim_enabled = true;
+	const char *home = getenv("HOME");
+	if (!home || !*home) {
+		return;
+	}
+	char path[512];
+	snprintf(path, sizeof(path), "%s/.config/jt/%s", home,
+		JTLABWC_APPEARANCE_CONFIG);
+	FILE *file = fopen(path, "r");
+	if (!file) {
+		return;
+	}
+	char line[256];
+	while (fgets(line, sizeof(line), file)) {
+		char *text = line;
+		while (*text == ' ' || *text == '\t') {
+			text++;
+		}
+		char *end = text + strlen(text);
+		while (end > text && (end[-1] == '\n' || end[-1] == '\r'
+				|| end[-1] == ' ' || end[-1] == '\t')) {
+			*--end = '\0';
+		}
+		if (!*text || *text == '#') {
+			continue;
+		}
+		/* Accept a bare true/false or key=value. */
+		char *key = "";
+		char *value = text;
+		char *equals = strchr(text, '=');
+		if (equals) {
+			*equals = '\0';
+			key = text;
+			value = equals + 1;
+			char *key_end = key + strlen(key);
+			while (key_end > key && (key_end[-1] == ' '
+					|| key_end[-1] == '\t')) {
+				*--key_end = '\0';
+			}
+			while (*value == ' ' || *value == '\t') {
+				value++;
+			}
+		}
+		if (!*value) {
+			continue;
+		}
+		if (!*key || !strcmp(key, "accent_border_animation")
+				|| !strcmp(key, "jtlabwc_border_anim_enabled")) {
+			jtlabwc_border_anim_enabled =
+				jtlabwc_config_bool(value, true);
+		}
+	}
+	fclose(file);
+	if (!jtlabwc_border_anim_enabled) {
+		struct view *view;
+		wl_list_for_each(view, &server.views, link) {
+			jtlabwc_border_anim_stop(&view->border.anim);
+			if (view->ssd) {
+				jtlabwc_border_anim_stop(&view->ssd->border_anim);
+			}
+		}
+	}
+}
+
 static void
 jtlabwc_control_apply_theme_overrides(struct theme *theme)
 {
@@ -13338,6 +14270,7 @@ jtlabwc_displays_config_load(void)
 static void
 jtlabwc_config_reload(void)
 {
+	jtlabwc_appearance_config_load();
 	jtlabwc_input_config_load();
 	jtlabwc_input_config_apply();
 	jtlabwc_keyboard_config_apply();
@@ -14001,6 +14934,7 @@ view_set_activated(struct view *view, bool activated)
 {
 	assert(view);
 	ssd_set_active(view->ssd, activated);
+	jtlabwc_view_border_set_active(view, activated);
 	if (view->impl->set_activated) {
 		view->impl->set_activated(view, activated);
 	}
@@ -14080,6 +15014,7 @@ view_moved(struct view *view)
 	}
 	LABWC_src_view_c_view_update_outputs(view);
 	ssd_update_geometry(view->ssd);
+	jtlabwc_view_border_update(view);
 	cursor_update_focus();
 	if (rc.resize_indicator && server.grabbed_view == view) {
 		resize_indicator_update(view);
@@ -14852,6 +15787,7 @@ view_set_ssd_mode(struct view *view, enum lab_ssd_mode mode)
 	if (!view_is_floating(view)) {
 		LABWC_src_view_c_view_apply_special_geometry(view);
 	}
+	jtlabwc_view_border_update(view);
 }
 void
 view_toggle_fullscreen(struct view *view)
@@ -14869,6 +15805,7 @@ LABWC_src_view_c_set_fullscreen(struct view *view, bool fullscreen)
 		view->impl->set_fullscreen(view, fullscreen);
 	}
 	view->fullscreen = fullscreen;
+	jtlabwc_view_border_update(view);
 	wl_signal_emit_mutable(&view->events.fullscreened, NULL);
 	if (!fullscreen && view->ssd_mode) {
 		LABWC_src_view_c_decorate(view);
@@ -15352,6 +16289,7 @@ view_reload_ssd(struct view *view)
 		LABWC_src_view_c_undecorate(view);
 		LABWC_src_view_c_decorate(view);
 	}
+	jtlabwc_view_border_update(view);
 }
 void
 view_toggle_keybinds(struct view *view)
@@ -15397,6 +16335,10 @@ view_update_visibility(struct view *view)
 		return;
 	}
 	wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
+	jtlabwc_view_border_update(view);
+	if (view->ssd) {
+		ssd_update_client_rounding(view->ssd);
+	}
 	desktop_update_top_layer_visibility();
 	if (view_has_strut_partial(view)) {
 		output_update_all_usable_areas(false);
@@ -15441,6 +16383,9 @@ view_destroy(struct view *view)
 	wl_list_remove(&view->destroy.link);
 	wl_list_remove(&view->capture.on_capture_source_destroy.link);
 	wlr_scene_node_destroy(&view->capture.scene->tree.node);
+	/* wlr_scene_create() puts the tree first, so destroying the node frees
+	 * the whole scene.  Later teardown calls must not see a stale pointer. */
+	view->capture.scene = NULL;
 	if (view->foreign_toplevel) {
 		foreign_toplevel_destroy(view->foreign_toplevel);
 		view->foreign_toplevel = NULL;
@@ -15463,6 +16408,7 @@ view_destroy(struct view *view)
 	LABWC_src_view_c_undecorate(view);
 	LABWC_src_view_c_clear_last_placement(view);
 	menu_on_view_destroy(view);
+	jtlabwc_view_border_destroy(view);
 	if (view->scene_tree) {
 		wlr_scene_node_destroy(&view->scene_tree->node);
 		view->scene_tree = NULL;
@@ -17239,6 +18185,9 @@ LABWC_src_xdg_c_handle_commit(struct wl_listener *listener, void *data)
 			toplevel->scheduled.height = view->current.height;
 		}
 	}
+	/* xdg_surface->geometry can change without a view move (offset-only
+	 * commits); refresh the CSD clip so the frame follows it. */
+	jtlabwc_view_border_update(view);
 }
 static int
 LABWC_src_xdg_c_handle_configure_timeout(void *data)
@@ -17691,6 +18640,7 @@ LABWC_src_xdg_c_handle_new_xdg_toplevel(struct wl_listener *listener, void *data
 		view->scene_tree, xdg_surface);
 	die_if_null(tree);
 	view->content_tree = tree;
+	jtlabwc_view_border_create(view);
 	node_descriptor_create(&view->scene_tree->node,
 		LAB_NODE_VIEW, view,   NULL);
 	view->ssd_preference = LAB_SSD_PREF_CLIENT;
@@ -20063,6 +21013,7 @@ main(int argc, char *argv[])
 		server.title_fmt = "jtlabwc - %o";
 	}
 	server_init();
+	jtlabwc_appearance_config_load();
 	server_start();
 	struct theme theme = { 0 };
 	theme_init(&theme);
