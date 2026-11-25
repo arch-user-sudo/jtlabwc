@@ -51,29 +51,37 @@ static void jtlabwc_control_finish(void);
 
 /* Focus-accent border animation (see ~/.config/jt/appearance.conf). */
 struct ssd;
+struct view;
 struct jtlabwc_border_anim;
 static bool jtlabwc_border_anim_enabled = true;
 static struct wl_event_source *jtlabwc_border_anim_timer;
+static struct wl_list jtlabwc_border_anim_running = {
+	.prev = &jtlabwc_border_anim_running,
+	.next = &jtlabwc_border_anim_running,
+};
 static void jtlabwc_appearance_config_load(void);
 static void jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim);
 static void jtlabwc_border_anim_stop(struct jtlabwc_border_anim *anim);
 static void jtlabwc_border_anim_finish(void);
+static void jtlabwc_border_refresh(struct view *view);
 static bool jtlabwc_border_anim_is_csd(struct jtlabwc_border_anim *anim);
 static struct wlr_scene_tree *
 jtlabwc_border_anim_csd_parent(struct jtlabwc_border_anim *anim);
 
-struct view;
 struct server;
 struct cursor_context;
 struct lab_data_buffer;
 
 struct jtlabwc_border_anim {
+	struct wl_list link;
 	struct wlr_scene_tree *tree;
 	struct wlr_scene_buffer *seg[2];
 	struct view *view;
 	struct wlr_scene_tree *frame_tree;
-	int top_offset;
 	bool running;
+	bool csd;
+	bool was_live;
+	bool was_active;
 	int elapsed_ms;
 };
 
@@ -88,7 +96,6 @@ struct jtlabwc_view_border {
 	float frame_color[4];
 	bool frame_valid;
 	bool active;
-	struct jtlabwc_border_anim anim;
 };
 struct action {
 	struct wl_list link;
@@ -1083,6 +1090,7 @@ struct view {
 	struct wl_event_source *pending_configure_timeout;
 	struct ssd *ssd;
 	struct jtlabwc_view_border border;
+	struct jtlabwc_border_anim border_anim;
 	struct resize_indicator {
 		int width, height;
 		struct wlr_scene_tree *tree;
@@ -1789,7 +1797,6 @@ struct ssd {
 		struct wlr_scene_rect *top, *bottom, *left, *right;
 		struct wlr_scene_buffer *corner_left, *corner_right;
 	} border;
-	struct jtlabwc_border_anim border_anim;
 	struct border margin;
 };
 struct ssd_button {
@@ -12292,7 +12299,6 @@ ssd_create(struct view *view, bool active)
 	assert(view);
 	struct ssd *ssd = znew(*ssd);
 	ssd->view = view;
-	ssd->border_anim.view = view;
 	ssd->tree = lab_wlr_scene_tree_create(view->scene_tree);
 	node_descriptor_create(&ssd->tree->node,
 		LAB_NODE_SSD_ROOT, view,   NULL);
@@ -12301,8 +12307,6 @@ ssd_create(struct view *view, bool active)
 	ssd_extents_create(ssd);
 	ssd_titlebar_create(ssd);
 	ssd_border_create(ssd);
-	ssd->border_anim.frame_tree = ssd->border.tree;
-	ssd->border_anim.top_offset = ssd->titlebar.height;
 	if (!view_titlebar_visible(view)) {
 		ssd_set_titlebar(ssd, false);
 	}
@@ -12372,7 +12376,6 @@ ssd_set_titlebar(struct ssd *ssd, bool enabled)
 	}
 	wlr_scene_node_set_enabled(&ssd->titlebar.tree->node, enabled);
 	ssd->titlebar.height = enabled ? rc.theme->titlebar_height : 0;
-	ssd->border_anim.top_offset = ssd->titlebar.height;
 	ssd_border_update(ssd);
 	ssd_extents_update(ssd);
 	ssd->margin = ssd_thickness(ssd->view);
@@ -12390,7 +12393,7 @@ ssd_destroy(struct ssd *ssd)
 			server.hovered_button->node) == view) {
 		server.hovered_button = NULL;
 	}
-	jtlabwc_border_anim_stop(&ssd->border_anim);
+	jtlabwc_border_anim_stop(&view->border_anim);
 	ssd_titlebar_destroy(ssd);
 	ssd_border_destroy(ssd);
 	ssd_extents_destroy(ssd);
@@ -12430,18 +12433,13 @@ ssd_set_active(struct ssd *ssd, bool active)
 	if (!ssd) {
 		return;
 	}
-	bool was_active = ssd->active;
 	ssd->active = active;
 	if (ssd->titlebar.accent_line) {
 		wlr_scene_node_set_enabled(
 			&ssd->titlebar.accent_line->node, active);
 	}
 	ssd_update_top_border_color(ssd);
-	if (!active) {
-		jtlabwc_border_anim_stop(&ssd->border_anim);
-	} else if (!was_active && ssd->view->type == LAB_XDG_SHELL_VIEW) {
-		jtlabwc_border_anim_start(&ssd->border_anim);
-	}
+	jtlabwc_border_refresh(ssd->view);
 }
 void
 ssd_enable_keybind_inhibit_indicator(struct ssd *ssd, bool enable)
@@ -13384,15 +13382,13 @@ jtlabwc_view_border_create(struct view *view)
 	jtlabwc_buffer_set_no_input(border->bottom);
 	jtlabwc_buffer_set_no_input(border->left);
 	jtlabwc_buffer_set_no_input(border->right);
-	border->anim.view = view;
-	border->anim.frame_tree = border->tree;
 	wlr_scene_node_set_enabled(&border->tree->node, false);
 }
 void
 jtlabwc_view_border_destroy(struct view *view)
 {
 	struct jtlabwc_view_border *border = &view->border;
-	jtlabwc_border_anim_stop(&border->anim);
+	jtlabwc_border_anim_stop(&view->border_anim);
 	jtlabwc_view_set_csd_clip(view, false);
 	jtlabwc_view_set_client_rounding(view, 0, 0);
 	if (border->tree) {
@@ -13417,7 +13413,7 @@ jtlabwc_view_border_update(struct view *view)
 		&& width > 0 && height > 0;
 	wlr_scene_node_set_enabled(&border->tree->node, visible);
 	if (!visible) {
-		jtlabwc_border_anim_stop(&border->anim);
+		jtlabwc_border_refresh(view);
 		jtlabwc_view_set_csd_clip(view, false);
 		if (view->type == LAB_XDG_SHELL_VIEW
 				&& view->ssd_mode == LAB_SSD_MODE_NONE) {
@@ -13426,7 +13422,13 @@ jtlabwc_view_border_update(struct view *view)
 		return;
 	}
 	int thickness = rc.theme->border_width;
-	int radius = MIN(MAX(0, rc.corner_radius), MIN(width, height) / 2);
+	/* Match SSD: maximized, snap-tiled and too-narrow windows lose their
+	 * rounded corners. */
+	bool square = view->maximized == VIEW_AXIS_BOTH
+		|| view_is_tiled_and_notify_tiled(view)
+		|| width < ssd_get_corner_width() * 2;
+	int radius = square ? 0
+		: MIN(MAX(0, rc.corner_radius), MIN(width, height) / 2);
 	/* CSD path: crop to the XDG window geometry first, then round the inner
 	 * edge of the compositor-drawn frame. */
 	jtlabwc_view_set_csd_clip(view, true);
@@ -13434,7 +13436,7 @@ jtlabwc_view_border_update(struct view *view)
 		MAX(0, radius - thickness), WLR_SCENE_CORNER_ALL);
 	if (thickness <= 0) {
 		wlr_scene_node_set_enabled(&border->tree->node, false);
-		jtlabwc_border_anim_stop(&border->anim);
+		jtlabwc_border_refresh(view);
 		jtlabwc_view_set_csd_clip(view, false);
 		jtlabwc_view_set_client_rounding(view, 0, 0);
 		return;
@@ -13511,6 +13513,7 @@ jtlabwc_view_border_update(struct view *view)
 		-thickness, height - radius);
 	wlr_scene_node_set_position(&border->corner[3]->node,
 		width - radius, height - radius);
+	jtlabwc_border_refresh(view);
 }
 void
 jtlabwc_view_border_set_active(struct view *view, bool active)
@@ -13522,11 +13525,7 @@ jtlabwc_view_border_set_active(struct view *view, bool active)
 	}
 	border->active = active;
 	jtlabwc_view_border_update(view);
-	if (!active) {
-		jtlabwc_border_anim_stop(&border->anim);
-	} else if (!was_active) {
-		jtlabwc_border_anim_start(&border->anim);
-	}
+	jtlabwc_border_refresh(view);
 }
 
 /* One-shot accent border animation.  Two halves start together at the bottom
@@ -13559,7 +13558,10 @@ jtlabwc_border_anim_stop(struct jtlabwc_border_anim *anim)
 	if (!anim) {
 		return;
 	}
-	anim->running = false;
+	if (anim->running) {
+		wl_list_remove(&anim->link);
+		anim->running = false;
+	}
 	anim->elapsed_ms = 0;
 	if (anim->tree) {
 		wlr_scene_node_destroy(&anim->tree->node);
@@ -13581,22 +13583,24 @@ jtlabwc_border_anim_step(struct jtlabwc_border_anim *anim)
 		jtlabwc_border_anim_stop(anim);
 		return false;
 	}
-	if (jtlabwc_border_anim_is_csd(anim)) {
-		if (!anim->view->mapped || !anim->view->scene_tree->node.enabled) {
-			jtlabwc_border_anim_stop(anim);
-			return false;
-		}
-		struct wlr_scene_tree *parent =
-			jtlabwc_border_anim_csd_parent(anim);
-		if (parent && anim->tree->node.parent != parent) {
-			wlr_scene_node_reparent(&anim->tree->node, parent);
-		}
-		/* The tree is a sibling of view->scene_tree, so follow it in
-		 * absolute scene coordinates on every tick. */
-		wlr_scene_node_set_position(&anim->tree->node,
-			anim->view->current.x, anim->view->current.y);
-		wlr_scene_node_raise_to_top(&anim->tree->node);
+	bool csd = jtlabwc_border_anim_is_csd(anim);
+	if (csd && (!anim->view->mapped
+			|| !anim->view->scene_tree->node.enabled)) {
+		jtlabwc_border_anim_stop(anim);
+		return false;
 	}
+	struct wlr_scene_tree *parent = csd
+		? jtlabwc_border_anim_csd_parent(anim)
+		: anim->view->scene_tree;
+	if (parent && anim->tree->node.parent != parent) {
+		wlr_scene_node_reparent(&anim->tree->node, parent);
+	}
+	/* CSD sits beside view->scene_tree and needs absolute coordinates;
+	 * SSD is a child of that tree and stays at its origin. */
+	wlr_scene_node_set_position(&anim->tree->node,
+		csd ? anim->view->current.x : 0,
+		csd ? anim->view->current.y : 0);
+	wlr_scene_node_raise_to_top(&anim->tree->node);
 
 	anim->elapsed_ms += JTLABWC_BORDER_ANIM_TICK_MS;
 	float progress = (float)anim->elapsed_ms
@@ -13611,10 +13615,12 @@ jtlabwc_border_anim_step(struct jtlabwc_border_anim *anim)
 	/* Centre the 4px stroke inside the border instead of pinning it to the
 	 * outer edge when the theme border is thicker. */
 	int inset = MAX(0, (border - thickness) / 2);
+	int top_offset = jtlabwc_border_anim_is_csd(anim)
+		? 0 : (anim->view->ssd ? anim->view->ssd->titlebar.height : 0);
 	int content_height = view_effective_height(anim->view, false);
 	int left = -border;
 	int right = anim->view->current.width + border;
-	int top = -(anim->top_offset + border);
+	int top = -(top_offset + border);
 	int bottom = content_height + border;
 	int frame_width = right - left;
 	int frame_height = bottom - top;
@@ -13728,19 +13734,16 @@ static int
 jtlabwc_border_anim_tick(void *data)
 {
 	(void)data;
-	bool any = false;
-	struct view *view;
-	wl_list_for_each(view, &server.views, link) {
-		if (jtlabwc_border_anim_step(&view->border.anim)) {
-			any = true;
-		}
-		if (view->ssd && jtlabwc_border_anim_step(&view->ssd->border_anim)) {
-			any = true;
-		}
+	struct jtlabwc_border_anim *anim, *tmp;
+	/* step() removes finished animations from the list. */
+	wl_list_for_each_safe(anim, tmp, &jtlabwc_border_anim_running, link) {
+		jtlabwc_border_anim_step(anim);
 	}
-	if (!any && jtlabwc_border_anim_timer) {
-		wl_event_source_remove(jtlabwc_border_anim_timer);
-		jtlabwc_border_anim_timer = NULL;
+	if (wl_list_empty(&jtlabwc_border_anim_running)) {
+		if (jtlabwc_border_anim_timer) {
+			wl_event_source_remove(jtlabwc_border_anim_timer);
+			jtlabwc_border_anim_timer = NULL;
+		}
 		return 0;
 	}
 	/* Timer sources are not re-armed by the callback return value. */
@@ -13754,7 +13757,7 @@ jtlabwc_border_anim_tick(void *data)
 static bool
 jtlabwc_border_anim_is_csd(struct jtlabwc_border_anim *anim)
 {
-	return anim && anim->view && &anim->view->border.anim == anim;
+	return anim && anim->csd;
 }
 
 static struct wlr_scene_tree *
@@ -13770,7 +13773,8 @@ jtlabwc_border_anim_csd_parent(struct jtlabwc_border_anim *anim)
 static void
 jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim)
 {
-	if (!jtlabwc_border_anim_enabled || !anim || !anim->frame_tree
+	if (!jtlabwc_border_anim_enabled || !anim || anim->running
+			|| !anim->frame_tree
 			|| !anim->view || !anim->view->scene_tree || !rc.theme
 			|| anim->view->fullscreen
 			|| anim->view->maximized == VIEW_AXIS_BOTH
@@ -13778,7 +13782,7 @@ jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim)
 		return;
 	}
 	struct wlr_scene_tree *parent = anim->view->scene_tree;
-	bool csd = jtlabwc_border_anim_is_csd(anim);
+	bool csd = anim->csd;
 	struct wlr_scene_tree *csd_parent =
 		csd ? jtlabwc_border_anim_csd_parent(anim) : NULL;
 	if (csd_parent) {
@@ -13796,6 +13800,7 @@ jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim)
 			anim->view->current.x, anim->view->current.y);
 	}
 	wlr_scene_node_raise_to_top(&anim->tree->node);
+	wl_list_insert(&jtlabwc_border_anim_running, &anim->link);
 	anim->running = true;
 	anim->elapsed_ms = 0;
 	jtlabwc_border_anim_step(anim);
@@ -13812,15 +13817,70 @@ jtlabwc_border_anim_start(struct jtlabwc_border_anim *anim)
 	}
 }
 
+static struct wlr_scene_tree *
+jtlabwc_border_anim_frame(struct view *view, bool *csd)
+{
+	if (!view) {
+		return NULL;
+	}
+	if (view->ssd_mode == LAB_SSD_MODE_NONE) {
+		*csd = true;
+		return view->border.tree;
+	}
+	if (view->ssd) {
+		*csd = false;
+		return view->ssd->border.tree;
+	}
+	return NULL;
+}
+
+/* One place decides when the sweep should run.  A frame becoming live covers
+ * newly mapped clients, unminimize and decoration changes; an active edge
+ * covers focus changes.  Both SSD and CSD share the same per-view animator. */
+static void
+jtlabwc_border_refresh(struct view *view)
+{
+	if (!view || view->type != LAB_XDG_SHELL_VIEW) {
+		return;
+	}
+	struct jtlabwc_border_anim *anim = &view->border_anim;
+	bool csd = false;
+	struct wlr_scene_tree *frame = jtlabwc_border_anim_frame(view, &csd);
+	bool active = view->ssd_mode == LAB_SSD_MODE_NONE
+		? view->border.active
+		: (view->ssd ? view->ssd->active : false);
+	bool live = jtlabwc_border_anim_enabled
+		&& frame && frame->node.enabled
+		&& view->scene_tree && view->scene_tree->node.enabled
+		&& view->mapped && !view->minimized && !view->fullscreen
+		&& view->maximized != VIEW_AXIS_BOTH
+		&& view->current.width > 0
+		&& view_effective_height(view, false) > 0;
+
+	anim->view = view;
+	if (!live) {
+		jtlabwc_border_anim_stop(anim);
+		anim->was_live = false;
+		anim->was_active = active;
+		return;
+	}
+	anim->frame_tree = frame;
+	anim->csd = csd;
+	if (!anim->was_live || (!anim->was_active && active)) {
+		jtlabwc_border_anim_start(anim);
+	} else if (anim->was_active && !active) {
+		jtlabwc_border_anim_stop(anim);
+	}
+	anim->was_live = true;
+	anim->was_active = active;
+}
+
 static void
 jtlabwc_border_anim_finish(void)
 {
 	struct view *view;
 	wl_list_for_each(view, &server.views, link) {
-		jtlabwc_border_anim_stop(&view->border.anim);
-		if (view->ssd) {
-			jtlabwc_border_anim_stop(&view->ssd->border_anim);
-		}
+		jtlabwc_border_anim_stop(&view->border_anim);
 	}
 	if (jtlabwc_border_anim_timer) {
 		wl_event_source_remove(jtlabwc_border_anim_timer);
@@ -13887,10 +13947,7 @@ jtlabwc_appearance_config_load(void)
 	if (!jtlabwc_border_anim_enabled) {
 		struct view *view;
 		wl_list_for_each(view, &server.views, link) {
-			jtlabwc_border_anim_stop(&view->border.anim);
-			if (view->ssd) {
-				jtlabwc_border_anim_stop(&view->ssd->border_anim);
-			}
+			jtlabwc_border_anim_stop(&view->border_anim);
 		}
 	}
 }
@@ -15559,6 +15616,7 @@ view_set_maximized(struct view *view, enum view_axis maximized)
 	view->maximized = maximized;
 	wl_signal_emit_mutable(&view->events.maximized, NULL);
 	ssd_update_margin(view->ssd);
+	jtlabwc_border_refresh(view);
 }
 bool
 view_is_tiled(struct view *view)
@@ -15829,6 +15887,7 @@ view_set_fullscreen(struct view *view, bool fullscreen)
 		view_store_natural_geometry(view);
 	}
 	LABWC_src_view_c_set_fullscreen(view, fullscreen);
+	jtlabwc_border_refresh(view);
 	if (view_is_floating(view)) {
 		view_apply_natural_geometry(view);
 	} else {
@@ -16286,7 +16345,13 @@ view_reload_ssd(struct view *view)
 {
 	assert(view);
 	if (view->ssd_mode && !view->fullscreen) {
+		/* Rebuilding the SSD is not a new window.  Keep the live/active
+		 * edge state so a theme refresh does not replay the sweep. */
+		bool was_live = view->border_anim.was_live;
+		bool was_active = view->border_anim.was_active;
 		LABWC_src_view_c_undecorate(view);
+		view->border_anim.was_live = was_live;
+		view->border_anim.was_active = was_active;
 		LABWC_src_view_c_decorate(view);
 	}
 	jtlabwc_view_border_update(view);
@@ -16336,6 +16401,7 @@ view_update_visibility(struct view *view)
 	}
 	wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
 	jtlabwc_view_border_update(view);
+	jtlabwc_border_refresh(view);
 	if (view->ssd) {
 		ssd_update_client_rounding(view->ssd);
 	}
@@ -16365,6 +16431,7 @@ view_init(struct view *view)
 	view->capture.scene = wlr_scene_create();
 	view->capture.scene->restack_xwayland_surfaces = false;
 	wl_list_init(&view->capture.on_capture_source_destroy.link);
+	view->border_anim.view = view;
 }
 void
 view_destroy(struct view *view)
