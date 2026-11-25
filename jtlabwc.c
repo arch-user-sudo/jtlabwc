@@ -6495,6 +6495,11 @@ cursor_process_button_release(struct seat *seat, uint32_t button,
 	const bool notify = !lab_set_contains(&seat->bound_buttons, button);
 	cursor_context_save(&seat->pressed, NULL);
 	if (server.input_mode == LAB_INPUT_STATE_MENU) {
+		/* Only left click drives menus.  Right/middle buttons inside a
+		 * popup are inert: no activation, no submenu change, no close. */
+		if (button != BTN_LEFT) {
+			return notify;
+		}
 		if (time_msec - LABWC_src_input_cursor_c_press_msec > rc.menu_ignore_button_release_period) {
 			if (ctx.type == LAB_NODE_MENUITEM) {
 				if (!menu_call_selected_actions()) {
@@ -13164,14 +13169,18 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 			theme->osd_border_width;
 	}
 	if (theme->snapping_overlay_region.border_color[0][0] == FLT_MIN) {
-		memcpy(theme->snapping_overlay_region.border_color,
-			theme->osd_border_color,
-			sizeof(theme->snapping_overlay_region.border_color));
+		for (int i = 0; i < 3; i++) {
+			memcpy(theme->snapping_overlay_region.border_color[i],
+				theme->osd_border_color,
+				sizeof(theme->snapping_overlay_region.border_color[i]));
+		}
 	}
 	if (theme->snapping_overlay_edge.border_color[0][0] == FLT_MIN) {
-		memcpy(theme->snapping_overlay_edge.border_color,
-			theme->osd_border_color,
-			sizeof(theme->snapping_overlay_edge.border_color));
+		for (int i = 0; i < 3; i++) {
+			memcpy(theme->snapping_overlay_edge.border_color[i],
+				theme->osd_border_color,
+				sizeof(theme->snapping_overlay_edge.border_color[i]));
+		}
 	}
 }
 static void jtlabwc_control_apply_theme_overrides(struct theme *theme);
