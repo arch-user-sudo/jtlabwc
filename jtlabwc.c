@@ -52,6 +52,7 @@ static void jtlabwc_control_finish(void);
 /* Focus-accent border animation (see ~/.config/jt/appearance.conf). */
 struct ssd;
 struct view;
+struct menu;
 struct jtlabwc_border_anim;
 static bool jtlabwc_border_anim_enabled = true;
 static struct wl_event_source *jtlabwc_border_anim_timer;
@@ -97,6 +98,29 @@ struct jtlabwc_view_border {
 	bool frame_valid;
 	bool active;
 };
+
+/* One bright segment laps the rounded popup border when a menu opens. */
+#define JTLABWC_MENU_LAP_MS 900
+#define JTLABWC_MENU_LAP_TICK_MS 16
+#define JTLABWC_MENU_LAP_THICKNESS 3
+#define JTLABWC_MENU_LAP_HALO 8
+#define JTLABWC_MENU_INSET 5
+struct jtlabwc_menu_border_anim {
+	struct wl_list link;
+	struct menu *menu;
+	struct wlr_scene_tree *tree;
+	struct wlr_scene_buffer *overlay;
+	bool running;
+	int elapsed_ms;
+};
+static struct wl_event_source *jtlabwc_menu_lap_timer;
+static struct wl_list jtlabwc_menu_laps = {
+	.prev = &jtlabwc_menu_laps,
+	.next = &jtlabwc_menu_laps,
+};
+static void jtlabwc_menu_lap_start(struct menu *menu);
+static void jtlabwc_menu_lap_stop(struct menu *menu);
+static void jtlabwc_menu_lap_finish(void);
 struct action {
 	struct wl_list link;
 	uint32_t type;
@@ -238,6 +262,7 @@ struct font {
 	int size;
 	PangoStyle slant;
 	PangoWeight weight;
+	bool absolute_size;
 };
 struct _PangoFontDescription *font_to_pango_desc(struct font *font);
 int font_height(struct font *font);
@@ -778,6 +803,8 @@ struct menu {
 		struct menuitem *item;
 	} selection;
 	struct wlr_scene_tree *scene_tree;
+	struct wlr_scene_buffer *display;
+	struct jtlabwc_menu_border_anim border_anim;
 	bool align_left;
 	struct view *triggered_by_view;
 	struct wl_list link;
@@ -5127,7 +5154,12 @@ font_to_pango_desc(struct font *font)
 {
 	PangoFontDescription *desc = pango_font_description_new();
 	pango_font_description_set_family(desc, font->name);
-	pango_font_description_set_size(desc, font->size * PANGO_SCALE);
+	if (font->absolute_size) {
+		pango_font_description_set_absolute_size(desc,
+			font->size * PANGO_SCALE);
+	} else {
+		pango_font_description_set_size(desc, font->size * PANGO_SCALE);
+	}
 	pango_font_description_set_style(desc, font->slant);
 	pango_font_description_set_weight(desc, font->weight);
 	return desc;
@@ -12761,22 +12793,22 @@ LABWC_src_theme_c_theme_builtin(struct theme *theme)
 			theme->window.button_colors[type]);
 	}
 	theme->menu_overlap_x = 0;
-	theme->menu_overlap_y = 0;
-	theme->menu_min_width = 20;
-	theme->menu_max_width = 200;
-	theme->menu_border_width = INT_MIN;
+	theme->menu_overlap_y = JTLABWC_MENU_INSET;
+	theme->menu_min_width = 164;
+	theme->menu_max_width = 640;
+	theme->menu_border_width = 1;
 	theme->menu_border_color[0] = FLT_MIN;
-	theme->menu_items_padding_x = 7;
-	theme->menu_items_padding_y = 4;
-	LABWC_src_theme_c_parse_hexstr("#030303f5", theme->menu_items_bg_color);
-	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_items_text_color);
-	LABWC_src_theme_c_parse_hexstr("#404040", theme->menu_items_active_bg_color);
+	theme->menu_items_padding_x = 13;
+	theme->menu_items_padding_y = 5;
+	LABWC_src_theme_c_parse_hexstr("#00000000", theme->menu_items_bg_color);
+	LABWC_src_theme_c_parse_hexstr("#e8e8e8", theme->menu_items_text_color);
+	LABWC_src_theme_c_parse_hexstr("#00000000", theme->menu_items_active_bg_color);
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_items_active_text_color);
 	theme->menu_separator_line_thickness = 1;
-	theme->menu_separator_padding_width = 6;
-	theme->menu_separator_padding_height = 3;
-	LABWC_src_theme_c_parse_hexstr("#40404066", theme->menu_separator_color);
-	LABWC_src_theme_c_parse_hexstr("#0f1011", theme->menu_title_bg_color);
+	theme->menu_separator_padding_width = 8;
+	theme->menu_separator_padding_height = 4;
+	LABWC_src_theme_c_parse_hexstr("#ffffff17", theme->menu_separator_color);
+	LABWC_src_theme_c_parse_hexstr("#00000000", theme->menu_title_bg_color);
 	theme->menu_title_text_justify = LABWC_src_theme_c_parse_justification("Center");
 	LABWC_src_theme_c_parse_hexstr("#ffffff", theme->menu_title_text_color);
 	LABWC_src_theme_c_parse_hexstr("#030303", theme->osd_bg_color);
@@ -13078,10 +13110,8 @@ LABWC_src_theme_c_post_processing(struct theme *theme)
 {
 	theme->titlebar_height = LABWC_src_theme_c_get_titlebar_height(theme);
 	LABWC_src_theme_c_fill_background_colors(&theme->window.title_bg);
-	theme->menu_item_height = font_height(&rc.font_menuitem)
-		+ 2 * theme->menu_items_padding_y;
-	theme->menu_header_height = font_height(&rc.font_menuheader)
-		+ 2 * theme->menu_items_padding_y;
+	theme->menu_item_height = 26;
+	theme->menu_header_height = 26;
 	if (rc.corner_radius >= theme->titlebar_height) {
 		rc.corner_radius = theme->titlebar_height - 1;
 	}
@@ -13278,6 +13308,250 @@ jtlabwc_accent_line_color(float out[4])
 		out[0] = out[1] = out[2] = out[3] = 1.0f;
 	}
 	jtlabwc_control_apply_color(out, &jtlabwc_accent_color);
+}
+
+static void
+jtlabwc_menu_round_rect(cairo_t *cr, double x, double y,
+	double w, double h, double r)
+{
+	if (w < 2.0 * r) {
+		r = w / 2.0;
+	}
+	if (h < 2.0 * r) {
+		r = h / 2.0;
+	}
+	if (r < 0.0) {
+		r = 0.0;
+	}
+	cairo_new_path(cr);
+	cairo_move_to(cr, x + r, y);
+	cairo_arc(cr, x + w - r, y + r, r, -1.5707963267948966, 0.0);
+	cairo_arc(cr, x + w - r, y + h - r, r, 0.0, 1.5707963267948966);
+	cairo_arc(cr, x + r, y + h - r, r, 1.5707963267948966,
+		3.141592653589793);
+	cairo_arc(cr, x + r, y + r, r, 3.141592653589793,
+		4.71238898038469);
+	cairo_close_path(cr);
+}
+
+/* The whole popup is one Cairo buffer, drawn the same way as jtfiles.  The
+ * per-item scene trees below it are only hitboxes. */
+static void
+jtlabwc_menu_text(cairo_t *cr, const char *text, double x, double y,
+	uint32_t rgb, double alpha)
+{
+	if (!text || !*text) {
+		return;
+	}
+	cairo_set_source_rgba(cr,
+		((rgb >> 16) & 0xffu) / 255.0,
+		((rgb >> 8) & 0xffu) / 255.0,
+		(rgb & 0xffu) / 255.0, alpha);
+	cairo_move_to(cr, x, y);
+	PangoLayout *layout = pango_cairo_create_layout(cr);
+	PangoFontDescription *desc = font_to_pango_desc(&rc.font_menuitem);
+	pango_layout_set_font_description(layout, desc);
+	pango_layout_set_text(layout, text, -1);
+	pango_cairo_show_layout(cr, layout);
+	g_object_unref(layout);
+	pango_font_description_free(desc);
+}
+
+static struct lab_data_buffer *
+jtlabwc_menu_draw_buffer(struct menu *menu)
+{
+	int width = menu->size.width;
+	int height = menu->size.height;
+	if (width <= 0 || height <= 0) {
+		return NULL;
+	}
+	struct lab_data_buffer *buffer =
+		buffer_create_cairo((uint32_t)width, (uint32_t)height, 1.0f);
+	if (!buffer) {
+		return NULL;
+	}
+	cairo_t *cr = cairo_create(buffer->surface);
+	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+	/* Frame: same shadow, gradient and border as the jtfiles popup.  Clip
+	 * the offset shadow to the panel path so it cannot leak into the
+	 * transparent area outside the bottom rounded corners. */
+	cairo_save(cr);
+	jtlabwc_menu_round_rect(cr, 0.0, 0.0,
+		(double)width, (double)height, 8.0);
+	cairo_clip(cr);
+	cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.45);
+	jtlabwc_menu_round_rect(cr, 2.0, 4.0,
+		(double)width, (double)height, 8.0);
+	cairo_fill(cr);
+	cairo_restore(cr);
+
+	cairo_pattern_t *grad = cairo_pattern_create_linear(
+		0.0, 0.0, 0.0, (double)height);
+	cairo_pattern_add_color_stop_rgba(grad, 0.0,
+		0x1A / 255.0, 0x1B / 255.0, 0x1D / 255.0, 0.98);
+	cairo_pattern_add_color_stop_rgba(grad, 1.0,
+		0x11 / 255.0, 0x11 / 255.0, 0x13 / 255.0, 0.98);
+	cairo_set_source(cr, grad);
+	jtlabwc_menu_round_rect(cr, 0.0, 0.0,
+		(double)width, (double)height, 8.0);
+	cairo_fill(cr);
+	cairo_pattern_destroy(grad);
+
+	cairo_set_source_rgba(cr, 0x40 / 255.0, 0x40 / 255.0,
+		0x40 / 255.0, 0.85);
+	cairo_set_line_width(cr, 1.0);
+	jtlabwc_menu_round_rect(cr, 0.5, 0.5,
+		(double)width - 1.0, (double)height - 1.0, 7.5);
+	cairo_stroke(cr);
+
+	struct menuitem *item;
+	int cy = JTLABWC_MENU_INSET;
+	wl_list_for_each(item, &menu->menuitems, link) {
+		if (item->type == LAB_MENU_SEPARATOR_LINE) {
+			cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.09);
+			cairo_set_line_width(cr, 1.0);
+			cairo_move_to(cr, 8.0, cy + 4.0);
+			cairo_line_to(cr, (double)width - 8.0, cy + 4.0);
+			cairo_stroke(cr);
+			cy += rc.theme->menu_separator_line_thickness
+				+ 2 * rc.theme->menu_separator_padding_height;
+			continue;
+		}
+		bool hot = item->selectable && menu->selection.item == item;
+		if (hot) {
+			float accent[4];
+			jtlabwc_accent_line_color(accent);
+			float fill[4] = {
+				accent[0] * 0.28f,
+				accent[1] * 0.28f,
+				accent[2] * 0.28f,
+				accent[3] * 0.28f,
+			};
+			set_cairo_color(cr, fill);
+			jtlabwc_menu_round_rect(cr, 5.0, (double)cy,
+				(double)width - 10.0, 26.0, 4.0);
+			cairo_fill(cr);
+		}
+		uint32_t col = item->selectable
+			? (hot ? 0xffffffu : 0xe8e8e8u) : 0x5c5c5cu;
+		jtlabwc_menu_text(cr, item->text, 14.0, cy + 5.0,
+			col, 0.97);
+		if (item->arrow) {
+			cairo_set_source_rgba(cr,
+				((col >> 16) & 0xffu) / 255.0,
+				((col >> 8) & 0xffu) / 255.0,
+				(col & 0xffu) / 255.0, 0.9);
+			cairo_move_to(cr, (double)width - 15.0, cy + 9.0);
+			cairo_line_to(cr, (double)width - 10.0, cy + 13.0);
+			cairo_line_to(cr, (double)width - 15.0, cy + 17.0);
+			cairo_close_path(cr);
+			cairo_fill(cr);
+		}
+		cy += 26;
+	}
+
+	cairo_surface_flush(buffer->surface);
+	cairo_destroy(cr);
+	return buffer;
+}
+
+static void
+jtlabwc_menu_redraw(struct menu *menu)
+{
+	if (!menu || !menu->display) {
+		return;
+	}
+	struct lab_data_buffer *buffer = jtlabwc_menu_draw_buffer(menu);
+	if (!buffer) {
+		return;
+	}
+	wlr_scene_buffer_set_buffer(menu->display, &buffer->base);
+	wlr_buffer_drop(&buffer->base);
+}
+
+/* Dash a single accent segment around the same rounded path jtfiles uses. */
+static struct lab_data_buffer *
+jtlabwc_menu_lap_buffer(int width, int height, float progress)
+{
+	if (width <= 0 || height <= 0) {
+		return NULL;
+	}
+	struct lab_data_buffer *buffer =
+		buffer_create_cairo((uint32_t)width, (uint32_t)height, 1.0f);
+	if (!buffer) {
+		return NULL;
+	}
+	cairo_t *cr = cairo_create(buffer->surface);
+	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+	const double pi = 3.141592653589793;
+	double x = 2.5, y = 2.5;
+	double w = (double)width - 5.0, h = (double)height - 5.0;
+	double r = 6.0;
+	if (w < 2.0 * r) {
+		r = w / 2.0;
+	}
+	if (h < 2.0 * r) {
+		r = h / 2.0;
+	}
+	if (r > 0.0 && w > 0.0 && h > 0.0) {
+		double top = w - 2.0 * r;
+		double side = h - 2.0 * r;
+		double perimeter = 2.0 * (top + side) + 2.0 * pi * r;
+		if (perimeter > 2.0) {
+			double start = 1.5 * top + side + pi * r;
+			double seg = fmin(48.0, fmax(14.0, perimeter / 10.0));
+			seg = fmin(seg, perimeter / 2.0);
+			double alpha = 1.0;
+			if ((double)progress < 0.08) {
+				alpha = (double)progress / 0.08;
+			} else if ((double)progress > 0.92) {
+				alpha = (1.0 - (double)progress) / 0.08;
+			}
+			if (alpha > 0.0) {
+				float accent[4];
+				jtlabwc_accent_line_color(accent);
+				float halo[4] = {
+					accent[0] * (float)alpha * 0.18f,
+					accent[1] * (float)alpha * 0.18f,
+					accent[2] * (float)alpha * 0.18f,
+					accent[3] * (float)alpha * 0.18f,
+				};
+				float core[4] = {
+					accent[0] * (float)alpha,
+					accent[1] * (float)alpha,
+					accent[2] * (float)alpha,
+					accent[3] * (float)alpha,
+				};
+				double dash[2] = {seg, perimeter - seg};
+				cairo_set_dash(cr, dash, 2,
+					-fmod(start + (double)progress * perimeter,
+						perimeter));
+				cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+
+				set_cairo_color(cr, halo);
+				cairo_set_line_width(cr,
+					(double)JTLABWC_MENU_LAP_THICKNESS + 5.0);
+				jtlabwc_menu_round_rect(cr, x, y, w, h, r);
+				cairo_stroke(cr);
+
+				/* cairo_stroke() clears the path; rebuild for the core. */
+				set_cairo_color(cr, core);
+				cairo_set_line_width(cr,
+					(double)JTLABWC_MENU_LAP_THICKNESS);
+				jtlabwc_menu_round_rect(cr, x, y, w, h, r);
+				cairo_stroke(cr);
+			}
+		}
+	}
+	cairo_surface_flush(buffer->surface);
+	cairo_destroy(cr);
+	return buffer;
 }
 
 /* Only the rounded corners need a Cairo buffer.  The straight edges are
@@ -13879,6 +14153,7 @@ static void
 jtlabwc_border_anim_finish(void)
 {
 	struct view *view;
+	jtlabwc_menu_lap_finish();
 	wl_list_for_each(view, &server.views, link) {
 		jtlabwc_border_anim_stop(&view->border_anim);
 	}
@@ -19284,7 +19559,6 @@ LABWC_src_menu_menu_c_item_create(struct menu *menu, const char *text, bool show
 {
 	assert(menu);
 	assert(text);
-	struct theme *theme = rc.theme;
 	struct menuitem *menuitem = znew(*menuitem);
 	menuitem->parent = menu;
 	menuitem->selectable = true;
@@ -19294,46 +19568,24 @@ LABWC_src_menu_menu_c_item_create(struct menu *menu, const char *text, bool show
 	LABWC_src_menu_menu_c_unescape_underscores(menuitem->text);
 	menuitem->native_width = font_width(&rc.font_menuitem, text);
 	if (menuitem->arrow) {
-		menuitem->native_width += font_width(&rc.font_menuitem, menuitem->arrow)
-					+ theme->menu_items_padding_x;
+		menuitem->native_width += 22;
 	}
 	wl_list_append(&menu->menuitems, &menuitem->link);
 	wl_list_init(&menuitem->actions);
 	return menuitem;
 }
 static struct wlr_scene_tree *
-LABWC_src_menu_menu_c_item_create_scene_for_state(struct menuitem *item, float *text_color,
-	float *bg_color)
+LABWC_src_menu_menu_c_item_create_scene_for_state(struct menuitem *item)
 {
 	struct menu *menu = item->parent;
 	struct theme *theme = rc.theme;
 	struct wlr_scene_tree *tree = lab_wlr_scene_tree_create(item->tree);
-	int bg_width = menu->size.width - 2 * theme->menu_border_width;
-	int arrow_width = item->arrow ?
-		font_width(&rc.font_menuitem, item->arrow) + theme->menu_items_padding_x : 0;
-	int label_max_width = bg_width - 2 * theme->menu_items_padding_x
-		- arrow_width;
-	if (label_max_width <= 0) {
-		return tree;
+	int bg_width = menu->size.width - 2 * JTLABWC_MENU_INSET;
+	float transparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+	if (bg_width > 0) {
+		lab_wlr_scene_rect_create(tree, bg_width,
+			theme->menu_item_height, transparent);
 	}
-	lab_wlr_scene_rect_create(tree, bg_width, theme->menu_item_height, bg_color);
-	struct scaled_font_buffer *label_buffer = scaled_font_buffer_create(tree);
-	assert(label_buffer);
-	scaled_font_buffer_update_markup(label_buffer, item->text, label_max_width,
-		&rc.font_menuitem, text_color, bg_color, item->use_markup);
-	int x = theme->menu_items_padding_x;
-	int y = (theme->menu_item_height - label_buffer->height) / 2;
-	wlr_scene_node_set_position(&label_buffer->scene_buffer->node, x, y);
-	if (!item->arrow) {
-		return tree;
-	}
-	struct scaled_font_buffer *arrow_buffer = scaled_font_buffer_create(tree);
-	assert(arrow_buffer);
-	scaled_font_buffer_update(arrow_buffer, item->arrow, -1,
-		&rc.font_menuitem, text_color, bg_color);
-	x += label_max_width + theme->menu_items_padding_x;
-	y = (theme->menu_item_height - label_buffer->height) / 2;
-	wlr_scene_node_set_position(&arrow_buffer->scene_buffer->node, x, y);
 	return tree;
 }
 static void
@@ -19346,15 +19598,13 @@ LABWC_src_menu_menu_c_item_create_scene(struct menuitem *menuitem, int *item_y)
 	menuitem->tree = lab_wlr_scene_tree_create(menu->scene_tree);
 	node_descriptor_create(&menuitem->tree->node, LAB_NODE_MENUITEM,
 		  NULL, menuitem);
-	menuitem->normal_tree = LABWC_src_menu_menu_c_item_create_scene_for_state(menuitem,
-		theme->menu_items_text_color,
-		theme->menu_items_bg_color);
-	menuitem->selected_tree = LABWC_src_menu_menu_c_item_create_scene_for_state(menuitem,
-		theme->menu_items_active_text_color,
-		theme->menu_items_active_bg_color);
+	menuitem->normal_tree =
+		LABWC_src_menu_menu_c_item_create_scene_for_state(menuitem);
+	menuitem->selected_tree =
+		LABWC_src_menu_menu_c_item_create_scene_for_state(menuitem);
 	wlr_scene_node_set_enabled(&menuitem->selected_tree->node, false);
 	wlr_scene_node_set_position(&menuitem->tree->node,
-		theme->menu_border_width, *item_y);
+		JTLABWC_MENU_INSET, *item_y);
 	*item_y += theme->menu_item_height;
 }
 static struct menuitem *
@@ -19387,23 +19637,14 @@ LABWC_src_menu_menu_c_separator_create_scene(struct menuitem *menuitem, int *ite
 	menuitem->normal_tree = lab_wlr_scene_tree_create(menuitem->tree);
 	int bg_height = theme->menu_separator_line_thickness
 		+ 2 * theme->menu_separator_padding_height;
-	int bg_width = menu->size.width - 2 * theme->menu_border_width;
-	int line_width = bg_width - 2 * theme->menu_separator_padding_width;
-	if (line_width <= 0) {
-		goto error;
+	int bg_width = menu->size.width - 2 * JTLABWC_MENU_INSET;
+	float transparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+	if (bg_width > 0) {
+		lab_wlr_scene_rect_create(menuitem->normal_tree, bg_width,
+			bg_height, transparent);
 	}
-	lab_wlr_scene_rect_create(menuitem->normal_tree, bg_width, bg_height,
-		theme->menu_items_bg_color);
-	struct wlr_scene_rect *line_rect = lab_wlr_scene_rect_create(
-		menuitem->normal_tree, line_width,
-		theme->menu_separator_line_thickness,
-		theme->menu_separator_color);
-	wlr_scene_node_set_position(&line_rect->node,
-		theme->menu_separator_padding_width,
-		theme->menu_separator_padding_height);
-error:
 	wlr_scene_node_set_position(&menuitem->tree->node,
-		theme->menu_border_width, *item_y);
+		JTLABWC_MENU_INSET, *item_y);
 	*item_y += bg_height;
 }
 static void
@@ -19413,57 +19654,155 @@ LABWC_src_menu_menu_c_title_create_scene(struct menuitem *menuitem, int *item_y)
 	assert(menuitem->type == LAB_MENU_TITLE);
 	struct menu *menu = menuitem->parent;
 	struct theme *theme = rc.theme;
-	float *bg_color = theme->menu_title_bg_color;
-	float *text_color = theme->menu_title_text_color;
 	menuitem->tree = lab_wlr_scene_tree_create(menu->scene_tree);
 	node_descriptor_create(&menuitem->tree->node, LAB_NODE_MENUITEM,
 		  NULL, menuitem);
 	menuitem->normal_tree = lab_wlr_scene_tree_create(menuitem->tree);
-	int bg_width = menu->size.width - 2 * theme->menu_border_width;
-	int text_width = bg_width - 2 * theme->menu_items_padding_x;
-	if (text_width <= 0) {
-		goto error;
+	int bg_width = menu->size.width - 2 * JTLABWC_MENU_INSET;
+	float transparent[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+	if (bg_width > 0) {
+		lab_wlr_scene_rect_create(menuitem->normal_tree,
+			bg_width, theme->menu_header_height, transparent);
 	}
-	lab_wlr_scene_rect_create(menuitem->normal_tree,
-		bg_width, theme->menu_header_height, bg_color);
-	struct scaled_font_buffer *title_font_buffer =
-		scaled_font_buffer_create(menuitem->normal_tree);
-	assert(title_font_buffer);
-	scaled_font_buffer_update(title_font_buffer, menuitem->text,
-		text_width, &rc.font_menuheader, text_color, bg_color);
-	int title_x = 0;
-	switch (theme->menu_title_text_justify) {
-	case LAB_JUSTIFY_CENTER:
-		title_x = (bg_width - menuitem->native_width) / 2;
-		title_x = MAX(title_x, 0);
-		break;
-	case LAB_JUSTIFY_LEFT:
-		title_x = theme->menu_items_padding_x;
-		break;
-	case LAB_JUSTIFY_RIGHT:
-		title_x = bg_width - menuitem->native_width
-				- theme->menu_items_padding_x;
-		break;
-	}
-	int title_y = (theme->menu_header_height - title_font_buffer->height) / 2;
-	wlr_scene_node_set_position(&title_font_buffer->scene_buffer->node,
-		title_x, title_y);
-error:
 	wlr_scene_node_set_position(&menuitem->tree->node,
-		theme->menu_border_width, *item_y);
+		JTLABWC_MENU_INSET, *item_y);
 	*item_y += theme->menu_header_height;
 }
+static void
+jtlabwc_menu_lap_stop(struct menu *menu)
+{
+	if (!menu) {
+		return;
+	}
+	struct jtlabwc_menu_border_anim *anim = &menu->border_anim;
+	if (anim->running) {
+		wl_list_remove(&anim->link);
+		anim->running = false;
+	}
+	anim->elapsed_ms = 0;
+	if (anim->tree) {
+		wlr_scene_node_destroy(&anim->tree->node);
+		anim->tree = NULL;
+		anim->overlay = NULL;
+	}
+}
+
+static bool
+jtlabwc_menu_lap_step(struct jtlabwc_menu_border_anim *anim)
+{
+	if (!anim || !anim->running || !anim->tree || !anim->menu
+			|| !anim->menu->scene_tree || !rc.theme) {
+		return false;
+	}
+	anim->elapsed_ms += JTLABWC_MENU_LAP_TICK_MS;
+	float progress = (float)anim->elapsed_ms / (float)JTLABWC_MENU_LAP_MS;
+	if (progress >= 1.0f) {
+		jtlabwc_menu_lap_stop(anim->menu);
+		return false;
+	}
+
+	struct lab_data_buffer *lap = jtlabwc_menu_lap_buffer(
+		anim->menu->size.width, anim->menu->size.height, progress);
+	if (!lap) {
+		jtlabwc_menu_lap_stop(anim->menu);
+		return false;
+	}
+	if (!anim->overlay) {
+		anim->overlay = lab_wlr_scene_buffer_create(anim->tree,
+			&lap->base);
+		jtlabwc_buffer_set_no_input(anim->overlay);
+	} else {
+		wlr_scene_buffer_set_buffer(anim->overlay, &lap->base);
+	}
+	wlr_buffer_drop(&lap->base);
+	wlr_scene_node_raise_to_top(&anim->tree->node);
+	return true;
+}
+
+static int
+jtlabwc_menu_lap_tick(void *data)
+{
+	(void)data;
+	struct jtlabwc_menu_border_anim *anim, *tmp;
+	wl_list_for_each_safe(anim, tmp, &jtlabwc_menu_laps, link) {
+		jtlabwc_menu_lap_step(anim);
+	}
+	if (wl_list_empty(&jtlabwc_menu_laps)) {
+		if (jtlabwc_menu_lap_timer) {
+			wl_event_source_remove(jtlabwc_menu_lap_timer);
+			jtlabwc_menu_lap_timer = NULL;
+		}
+		return 0;
+	}
+	if (jtlabwc_menu_lap_timer) {
+		wl_event_source_timer_update(jtlabwc_menu_lap_timer,
+			JTLABWC_MENU_LAP_TICK_MS);
+	}
+	return 0;
+}
+
+static void
+jtlabwc_menu_lap_start(struct menu *menu)
+{
+	if (!jtlabwc_border_anim_enabled || !menu || !menu->scene_tree
+			|| !rc.theme) {
+		return;
+	}
+	struct jtlabwc_menu_border_anim *anim = &menu->border_anim;
+	jtlabwc_menu_lap_stop(menu);
+	anim->menu = menu;
+	anim->tree = lab_wlr_scene_tree_create(menu->scene_tree);
+	wlr_scene_node_raise_to_top(&anim->tree->node);
+	wl_list_insert(&jtlabwc_menu_laps, &anim->link);
+	anim->running = true;
+	anim->elapsed_ms = 0;
+	if (!jtlabwc_menu_lap_step(anim)) {
+		return;
+	}
+	if (!jtlabwc_menu_lap_timer && server.wl_event_loop) {
+		jtlabwc_menu_lap_timer = wl_event_loop_add_timer(
+			server.wl_event_loop, jtlabwc_menu_lap_tick, NULL);
+	}
+	if (jtlabwc_menu_lap_timer) {
+		wl_event_source_timer_update(jtlabwc_menu_lap_timer,
+			JTLABWC_MENU_LAP_TICK_MS);
+	}
+}
+
+static void
+jtlabwc_menu_lap_finish(void)
+{
+	struct jtlabwc_menu_border_anim *anim, *tmp;
+	wl_list_for_each_safe(anim, tmp, &jtlabwc_menu_laps, link) {
+		wl_list_remove(&anim->link);
+		anim->running = false;
+		anim->menu = NULL;
+		anim->elapsed_ms = 0;
+		if (anim->tree) {
+			wlr_scene_node_destroy(&anim->tree->node);
+			anim->tree = NULL;
+		}
+		anim->overlay = NULL;
+	}
+	if (jtlabwc_menu_lap_timer) {
+		wl_event_source_remove(jtlabwc_menu_lap_timer);
+		jtlabwc_menu_lap_timer = NULL;
+	}
+}
+
 static void LABWC_src_menu_menu_c_item_destroy(struct menuitem *item);
 static void
 LABWC_src_menu_menu_c_reset_menu(struct menu *menu)
 {
 	struct menuitem *item, *next;
+	jtlabwc_menu_lap_stop(menu);
 	wl_list_for_each_safe(item, next, &menu->menuitems, link) {
 		LABWC_src_menu_menu_c_item_destroy(item);
 	}
 	if (menu->scene_tree) {
 		wlr_scene_node_destroy(&menu->scene_tree->node);
 		menu->scene_tree = NULL;
+		menu->display = NULL;
 	}
 }
 static void
@@ -19483,7 +19822,7 @@ LABWC_src_menu_menu_c_menu_create_scene(struct menu *menu)
 	}
 	menu->size.width = MAX(menu->size.width, theme->menu_min_width);
 	menu->size.width = MIN(menu->size.width, theme->menu_max_width);
-	int item_y = theme->menu_border_width;
+	int item_y = JTLABWC_MENU_INSET;
 	wl_list_for_each(item, &menu->menuitems, link) {
 		assert(!item->tree);
 		switch (item->type) {
@@ -19498,17 +19837,15 @@ LABWC_src_menu_menu_c_menu_create_scene(struct menu *menu)
 			break;
 		}
 	}
-	menu->size.height = item_y + theme->menu_border_width;
-	struct lab_scene_rect_options opts = {
-		.border_colors = (float *[1]) {theme->menu_border_color},
-		.nr_borders = 1,
-		.border_width = theme->menu_border_width,
-		.width = menu->size.width,
-		.height = menu->size.height,
-	};
-	struct lab_scene_rect *bg_rect =
-		lab_scene_rect_create(menu->scene_tree, &opts);
-	wlr_scene_node_lower_to_bottom(&bg_rect->tree->node);
+	menu->size.height = item_y + JTLABWC_MENU_INSET;
+	struct lab_data_buffer *background = jtlabwc_menu_draw_buffer(menu);
+	if (background) {
+		menu->display = lab_wlr_scene_buffer_create(menu->scene_tree,
+			&background->base);
+		jtlabwc_buffer_set_no_input(menu->display);
+		wlr_scene_node_lower_to_bottom(&menu->display->node);
+		wlr_buffer_drop(&background->base);
+	}
 }
 static void
 LABWC_src_menu_menu_c_item_destroy(struct menuitem *item)
@@ -19527,8 +19864,8 @@ LABWC_src_menu_menu_c_get_item_anchor_rect(struct theme *theme, struct menuitem 
 	struct menu *menu = item->parent;
 	int menu_x = menu->scene_tree->node.x;
 	int menu_y = menu->scene_tree->node.y;
-	int overlap_x = theme->menu_overlap_x + theme->menu_border_width;
-	int overlap_y = theme->menu_overlap_y - theme->menu_border_width;
+	int overlap_x = theme->menu_overlap_x + JTLABWC_MENU_INSET;
+	int overlap_y = theme->menu_overlap_y - JTLABWC_MENU_INSET;
 	return (struct wlr_box) {
 		.x = menu_x + overlap_x,
 		.y = menu_y + item->tree->node.y + overlap_y,
@@ -19675,12 +20012,15 @@ LABWC_src_menu_menu_c_init_windowmenu(void)
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleMaximize");
 	item = LABWC_src_menu_menu_c_item_create(menu, "Fullscreen", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleFullscreen");
+	LABWC_src_menu_menu_c_separator_create(menu, NULL);
 	item = LABWC_src_menu_menu_c_item_create(menu, "Decorations", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleDecorations");
 	item = LABWC_src_menu_menu_c_item_create(menu, "Always on Top", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "ToggleAlwaysOnTop");
+	LABWC_src_menu_menu_c_separator_create(menu, NULL);
 	item = LABWC_src_menu_menu_c_item_create(menu, "Workspace", true);
 	item->submenu = menu_get_by_id("client-send-to-menu");
+	LABWC_src_menu_menu_c_separator_create(menu, NULL);
 	item = LABWC_src_menu_menu_c_item_create(menu, "Close", false);
 	LABWC_src_menu_menu_c_item_add_action(item, "Close");
 	if (wl_list_length(&rc.workspace_config.workspaces) == 1) {
@@ -19731,10 +20071,12 @@ LABWC_src_menu_menu_c_menu_set_selection(struct menu *menu, struct menuitem *ite
 		wlr_scene_node_set_enabled(&item->selected_tree->node, true);
 	}
 	menu->selection.item = item;
+	jtlabwc_menu_redraw(menu);
 }
 static void
 LABWC_src_menu_menu_c__close(struct menu *menu)
 {
+	jtlabwc_menu_lap_stop(menu);
 	if (menu->scene_tree) {
 		wlr_scene_node_set_enabled(&menu->scene_tree->node, false);
 	}
@@ -19766,6 +20108,7 @@ LABWC_src_menu_menu_c_open_menu(struct menu *menu, struct wlr_box anchor_rect)
 	}
 	LABWC_src_menu_menu_c_menu_reposition(menu, anchor_rect);
 	wlr_scene_node_set_enabled(&menu->scene_tree->node, true);
+	jtlabwc_menu_lap_start(menu);
 }
 void
 menu_open(struct menu *menu, int x, int y)
@@ -20577,6 +20920,10 @@ LABWC_src_config_rcxml_c_init_defaults(void)
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_inactivewindow);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_menuheader);
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_menuitem);
+	rc.font_menuitem.size = 13;
+	rc.font_menuheader.size = 13;
+	rc.font_menuitem.absolute_size = true;
+	rc.font_menuheader.absolute_size = true;
 	LABWC_src_config_rcxml_c_init_font_defaults(&rc.font_osd);
 	rc.focus_follow_mouse_requires_movement = true;
 	rc.doubleclick_time = 200;
@@ -20672,8 +21019,8 @@ LABWC_src_config_rcxml_c_post_processing(void)
 	LABWC_src_config_rcxml_c_load_default_mouse_bindings();
 	rc.font_activewindow.name = xstrdup("sans");
 	rc.font_inactivewindow.name = xstrdup("sans");
-	rc.font_menuheader.name = xstrdup("sans");
-	rc.font_menuitem.name = xstrdup("sans");
+	rc.font_menuheader.name = xstrdup("Liberation Sans");
+	rc.font_menuitem.name = xstrdup("Liberation Sans");
 	rc.font_osd.name = xstrdup("sans");
 	struct libinput_category *l = libinput_category_create();
 	(void)l;
