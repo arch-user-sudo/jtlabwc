@@ -812,6 +812,7 @@ struct menu {
 void menu_item_select_next(void);
 void menu_item_select_previous(void);
 bool menu_item_select_by_accelerator(uint32_t accelerator);
+void menu_submenu_open_selected(void);
 void menu_submenu_enter(void);
 void menu_submenu_leave(void);
 bool menu_call_selected_actions(void);
@@ -6496,7 +6497,9 @@ cursor_process_button_release(struct seat *seat, uint32_t button,
 	if (server.input_mode == LAB_INPUT_STATE_MENU) {
 		if (time_msec - LABWC_src_input_cursor_c_press_msec > rc.menu_ignore_button_release_period) {
 			if (ctx.type == LAB_NODE_MENUITEM) {
-				menu_call_selected_actions();
+				if (!menu_call_selected_actions()) {
+					menu_submenu_open_selected();
+				}
 			} else {
 				menu_close();
 				cursor_update_focus();
@@ -20137,17 +20140,12 @@ LABWC_src_menu_menu_c_menu_process_item_selection(struct menuitem *item)
 		return;
 	}
 	LABWC_src_menu_menu_c_menu_set_selection(item->parent, item);
+	/* Hover only changes the highlighted row.  Submenus are opened by
+	 * click/Enter; moving to another row closes the current one. */
 	if (item->parent->selection.menu) {
 		LABWC_src_menu_menu_c_menu_close(item->parent->selection.menu);
+		item->parent->selection.menu = NULL;
 	}
-	if (item->submenu) {
-		item->submenu->triggered_by_view = item->parent->triggered_by_view;
-		item->submenu->parent = item->parent;
-		struct wlr_box anchor_rect =
-			LABWC_src_menu_menu_c_get_item_anchor_rect(rc.theme, item);
-		LABWC_src_menu_menu_c_open_menu(item->submenu, anchor_rect);
-	}
-	item->parent->selection.menu = item->submenu;
 }
 static struct menu *
 LABWC_src_menu_menu_c_get_selection_leaf(void)
@@ -20163,6 +20161,28 @@ LABWC_src_menu_menu_c_get_selection_leaf(void)
 		menu = menu->selection.menu;
 	}
 	return menu;
+}
+void
+menu_submenu_open_selected(void)
+{
+	struct menu *menu = LABWC_src_menu_menu_c_get_selection_leaf();
+	if (!menu || !menu->selection.item || !menu->selection.item->submenu) {
+		return;
+	}
+	struct menuitem *item = menu->selection.item;
+	if (menu->selection.menu == item->submenu) {
+		return;
+	}
+	if (menu->selection.menu) {
+		LABWC_src_menu_menu_c_menu_close(menu->selection.menu);
+		menu->selection.menu = NULL;
+	}
+	item->submenu->triggered_by_view = item->parent->triggered_by_view;
+	item->submenu->parent = item->parent;
+	struct wlr_box anchor_rect =
+		LABWC_src_menu_menu_c_get_item_anchor_rect(rc.theme, item);
+	LABWC_src_menu_menu_c_open_menu(item->submenu, anchor_rect);
+	menu->selection.menu = item->submenu;
 }
 static void
 LABWC_src_menu_menu_c_menu_item_select(bool forward)
@@ -20270,7 +20290,12 @@ void
 menu_submenu_enter(void)
 {
 	struct menu *menu = LABWC_src_menu_menu_c_get_selection_leaf();
-	if (!menu || !menu->selection.menu) {
+	if (!menu || !menu->selection.item || !menu->selection.item->submenu) {
+		return;
+	}
+	/* Right/Enter open the submenu first, then move focus to its first row. */
+	menu_submenu_open_selected();
+	if (!menu->selection.menu) {
 		return;
 	}
 	struct wl_list *start = &menu->selection.menu->menuitems;
