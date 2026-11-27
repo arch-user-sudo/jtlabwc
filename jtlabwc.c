@@ -55,6 +55,9 @@ struct view;
 struct menu;
 struct jtlabwc_border_anim;
 static bool jtlabwc_border_anim_enabled = true;
+/* Color-only refreshes rebuild the SSD, which would otherwise re-arm the
+ * border sweep on every rainbow tick. */
+static bool jtlabwc_border_anim_quiet;
 static struct wl_event_source *jtlabwc_border_anim_timer;
 static struct wl_list jtlabwc_border_anim_running = {
 	.prev = &jtlabwc_border_anim_running,
@@ -8535,7 +8538,27 @@ static const char LABWC_src_main_c_labwc_usage[] =
 "  -s, --startup <command>  Run command on startup\n"
 "  -S, --session <command>  Run command on startup and terminate on exit\n"
 "  -t, --title <fmtstr>     Specify title to use when running in a window\n"
-"  -v, --version            Show version number and quit\n";
+"  -v, --version            Show version number and quit\n"
+"  rainbow, --rainbow       Cycle the accent through the hue wheel\n";
+/* Accept both spellings as positional launch arguments and remove them before
+ * getopt_long(), which would otherwise reject them. */
+static bool
+jtlabwc_strip_rainbow_arg(int *argc, char **argv)
+{
+	bool rainbow = false;
+	int out = 1;
+	for (int in = 1; in < *argc; in++) {
+		if (!strcmp(argv[in], "rainbow")
+				|| !strcmp(argv[in], "--rainbow")) {
+			rainbow = true;
+			continue;
+		}
+		argv[out++] = argv[in];
+	}
+	argv[out] = NULL;
+	*argc = out;
+	return rainbow;
+}
 static void
 LABWC_src_main_c_usage(void)
 {
@@ -13237,6 +13260,15 @@ struct jtlabwc_control_client {
 static struct jtlabwc_control_color jtlabwc_close_color;
 static struct jtlabwc_control_color jtlabwc_snap_color;
 static struct jtlabwc_control_color jtlabwc_accent_color;
+static struct jtlabwc_control_color jtlabwc_accent_base;
+static struct jtlabwc_control_color jtlabwc_close_before_rainbow;
+static struct jtlabwc_control_color jtlabwc_snap_before_rainbow;
+static bool jtlabwc_rainbow_colors_saved;
+static bool jtlabwc_rainbow_enabled;
+static double jtlabwc_rainbow_start;
+static struct wl_event_source *jtlabwc_rainbow_timer;
+#define JTLABWC_RAINBOW_PERIOD 8.0
+#define JTLABWC_RAINBOW_TICK_MS 100
 static int jtlabwc_control_fd = -1;
 static struct wl_event_source *jtlabwc_control_source;
 static char jtlabwc_control_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -13844,6 +13876,12 @@ jtlabwc_border_anim_stop(struct jtlabwc_border_anim *anim)
 	if (!anim) {
 		return;
 	}
+	/* An SSD rebuild destroys the frame an active sweep is following. Keep
+	 * the sweep alive here; jtlabwc_border_refresh() re-points it at the new
+	 * frame once the rebuild is done. */
+	if (jtlabwc_border_anim_quiet && anim->running) {
+		return;
+	}
 	if (anim->running) {
 		wl_list_remove(&anim->link);
 		anim->running = false;
@@ -14132,6 +14170,16 @@ jtlabwc_border_refresh(struct view *view)
 	struct jtlabwc_border_anim *anim = &view->border_anim;
 	bool csd = false;
 	struct wlr_scene_tree *frame = jtlabwc_border_anim_frame(view, &csd);
+	if (jtlabwc_border_anim_quiet) {
+		/* Re-point an active sweep at the freshly rebuilt frame, but do
+		 * not start, restart or cancel anything. */
+		if (anim->running && frame && frame->node.enabled) {
+			anim->view = view;
+			anim->frame_tree = frame;
+			anim->csd = csd;
+		}
+		return;
+	}
 	bool active = view->ssd_mode == LAB_SSD_MODE_NONE
 		? view->border.active
 		: (view->ssd ? view->ssd->active : false);
@@ -14159,6 +14207,20 @@ jtlabwc_border_refresh(struct view *view)
 	}
 	anim->was_live = true;
 	anim->was_active = active;
+}
+
+/* Force one sweep on every eligible view. Used when rainbow mode first turns
+ * on; ordinary focus/lifecycle refresh still goes through the normal path. */
+static void
+jtlabwc_border_refresh_all(bool force)
+{
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		if (force) {
+			view->border_anim.was_live = false;
+		}
+		jtlabwc_border_refresh(view);
+	}
 }
 
 static void
@@ -14239,13 +14301,40 @@ jtlabwc_appearance_config_load(void)
 	}
 }
 
+/* Remember the built-in colors before any control override is applied so an
+ * unset accent can be restored without tearing down the whole theme. */
+static struct {
+	float close[LAB_NODE_BUTTON_LAST + 1][4];
+	struct theme_snapping_overlay region;
+	struct theme_snapping_overlay edge;
+} jtlabwc_theme_defaults;
+static bool jtlabwc_theme_defaults_saved;
+
+static void
+jtlabwc_control_save_theme_defaults(struct theme *theme)
+{
+	if (jtlabwc_theme_defaults_saved) {
+		return;
+	}
+	memcpy(jtlabwc_theme_defaults.close, theme->window.button_colors,
+		sizeof(jtlabwc_theme_defaults.close));
+	jtlabwc_theme_defaults.region = theme->snapping_overlay_region;
+	jtlabwc_theme_defaults.edge = theme->snapping_overlay_edge;
+	jtlabwc_theme_defaults_saved = true;
+}
+
 static void
 jtlabwc_control_apply_theme_overrides(struct theme *theme)
 {
+	jtlabwc_control_save_theme_defaults(theme);
 	if (jtlabwc_close_color.set) {
 		jtlabwc_control_apply_color(
 			theme->window.button_colors[LAB_NODE_BUTTON_CLOSE],
 			&jtlabwc_close_color);
+	} else {
+		memcpy(theme->window.button_colors[LAB_NODE_BUTTON_CLOSE],
+			jtlabwc_theme_defaults.close[LAB_NODE_BUTTON_CLOSE],
+			sizeof(theme->window.button_colors[LAB_NODE_BUTTON_CLOSE]));
 	}
 	if (jtlabwc_snap_color.set) {
 		jtlabwc_control_apply_color(
@@ -14260,6 +14349,9 @@ jtlabwc_control_apply_theme_overrides(struct theme *theme)
 				theme->snapping_overlay_edge.border_color[i],
 				&jtlabwc_snap_color);
 		}
+	} else {
+		theme->snapping_overlay_region = jtlabwc_theme_defaults.region;
+		theme->snapping_overlay_edge = jtlabwc_theme_defaults.edge;
 	}
 }
 static void
@@ -14278,6 +14370,332 @@ jtlabwc_control_refresh(void)
 	if (server.seat.overlay.rect || server.seat.overlay.timer) {
 		overlay_finish(&server.seat);
 		overlay_update(&server.seat);
+	}
+}
+
+static void
+jtlabwc_scaled_img_buffer_set(struct scaled_img_buffer *buffer,
+	struct lab_img *img)
+{
+	struct lab_img *copy;
+	if (!buffer || !img || !(copy = lab_img_copy(img))) {
+		return;
+	}
+	lab_img_destroy(buffer->img);
+	buffer->img = copy;
+	scaled_buffer_request_update(buffer->scaled_buffer,
+		buffer->width, buffer->height);
+}
+
+/* Rebuild only the close-button images whose colour follows the accent. */
+static void
+jtlabwc_control_refresh_close_images(void)
+{
+	if (!rc.theme) {
+		return;
+	}
+	struct theme close_theme = {0};
+	memcpy(close_theme.window.button_colors[LAB_NODE_BUTTON_CLOSE],
+		rc.theme->window.button_colors[LAB_NODE_BUTTON_CLOSE],
+		sizeof(rc.theme->window.button_colors[LAB_NODE_BUTTON_CLOSE]));
+	struct LABWC_src_theme_c_button close_buttons[] = { {
+		.name = "close",
+		.fallback_button = (const char[]){ 0x33, 0x3f, 0x1e, 0x1e, 0x3f, 0x33 },
+		.type = LAB_NODE_BUTTON_CLOSE,
+		.state_set = 0,
+	}, {
+		.name = "close_hover",
+		.type = LAB_NODE_BUTTON_CLOSE,
+		.state_set = LAB_BS_HOVERED,
+	}, };
+	for (size_t i = 0; i < ARRAY_SIZE(close_buttons); i++) {
+		LABWC_src_theme_c_load_button(&close_theme, &close_buttons[i]);
+	}
+	for (uint8_t state = LAB_BS_DEFAULT; state <= LAB_BS_ALL; state++) {
+		struct lab_img *img = close_theme.window
+			.button_imgs[LAB_NODE_BUTTON_CLOSE][state];
+		if (!img) {
+			continue;
+		}
+		lab_img_destroy(rc.theme->window
+			.button_imgs[LAB_NODE_BUTTON_CLOSE][state]);
+		rc.theme->window.button_imgs[LAB_NODE_BUTTON_CLOSE][state] = img;
+		close_theme.window.button_imgs[LAB_NODE_BUTTON_CLOSE][state] = NULL;
+	}
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		if (!view->ssd) {
+			continue;
+		}
+		struct ssd_button *button;
+		wl_list_for_each(button, &view->ssd->titlebar.buttons_left, link) {
+			if (button->type != LAB_NODE_BUTTON_CLOSE) {
+				continue;
+			}
+			for (uint8_t state = LAB_BS_DEFAULT;
+					state <= LAB_BS_ALL; state++) {
+				jtlabwc_scaled_img_buffer_set(button->img_buffers[state],
+					rc.theme->window
+						.button_imgs[LAB_NODE_BUTTON_CLOSE][state]);
+			}
+		}
+		wl_list_for_each(button, &view->ssd->titlebar.buttons_right, link) {
+			if (button->type != LAB_NODE_BUTTON_CLOSE) {
+				continue;
+			}
+			for (uint8_t state = LAB_BS_DEFAULT;
+					state <= LAB_BS_ALL; state++) {
+				jtlabwc_scaled_img_buffer_set(button->img_buffers[state],
+					rc.theme->window
+						.button_imgs[LAB_NODE_BUTTON_CLOSE][state]);
+			}
+		}
+	}
+	for (uint8_t state = LAB_BS_DEFAULT; state <= LAB_BS_ALL; state++) {
+		lab_img_destroy(close_theme.window
+			.button_imgs[LAB_NODE_BUTTON_CLOSE][state]);
+	}
+}
+
+/* Recolor an already-visible snap overlay without destroying it. Rebuilding
+ * the overlay here would re-arm its delayed edge-snap timer every color tick. */
+static void
+jtlabwc_control_refresh_overlay_colors(void)
+{
+	struct overlay *overlay = &server.seat.overlay;
+	if (!rc.theme || !overlay->rect) {
+		return;
+	}
+	struct theme_snapping_overlay *theme = overlay->active.region
+		? &rc.theme->snapping_overlay_region
+		: &rc.theme->snapping_overlay_edge;
+	if (overlay->rect->fill) {
+		wlr_scene_rect_set_color(overlay->rect->fill, theme->bg_color);
+	}
+	for (int i = 0;
+			i < overlay->rect->nr_borders && i < 3; i++) {
+		float *color = theme->border_color[i];
+		struct border_scene *border = &overlay->rect->borders[i];
+		wlr_scene_rect_set_color(border->top, color);
+		wlr_scene_rect_set_color(border->right, color);
+		wlr_scene_rect_set_color(border->bottom, color);
+		wlr_scene_rect_set_color(border->left, color);
+	}
+}
+
+/* Rainbow ticks only change colors. Update the accent-colored scene nodes in
+ * place instead of tearing down the whole theme and reloading every view's
+ * decorations sixteen times a second. */
+static void
+jtlabwc_control_refresh_colors(void)
+{
+	if (!rc.theme) {
+		return;
+	}
+	jtlabwc_control_apply_theme_overrides(rc.theme);
+	float accent_line_color[4];
+	jtlabwc_accent_line_color(accent_line_color);
+	struct view *view;
+	wl_list_for_each(view, &server.views, link) {
+		if (!view->ssd) {
+			continue;
+		}
+		if (view->ssd->titlebar.accent_line) {
+			wlr_scene_rect_set_color(view->ssd->titlebar.accent_line,
+				accent_line_color);
+		}
+	}
+	jtlabwc_control_refresh_close_images();
+	jtlabwc_control_refresh_overlay_colors();
+}
+
+/* A color refresh must not look like a new window or a focus change to the
+ * border animator. */
+static void
+jtlabwc_control_refresh_quiet(void)
+{
+	jtlabwc_border_anim_quiet = true;
+	jtlabwc_control_refresh_colors();
+	jtlabwc_border_anim_quiet = false;
+}
+static double
+jtlabwc_monotonic_seconds(void)
+{
+	struct timespec now = {0};
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+}
+static void
+jtlabwc_rainbow_color(double t, struct jtlabwc_control_color *color)
+{
+	double phase = fmod(t, JTLABWC_RAINBOW_PERIOD);
+	if (phase < 0.0) {
+		phase += JTLABWC_RAINBOW_PERIOD;
+	}
+	double h = phase * (6.0 / JTLABWC_RAINBOW_PERIOD);
+	int i = (int)h;
+	double f = h - (double)i;
+	double q = 1.0 - f;
+	double r, g, b;
+	switch (i) {
+	case 0:
+		r = 1.0; g = f;    b = 0.0;
+		break;
+	case 1:
+		r = q;    g = 1.0; b = 0.0;
+		break;
+	case 2:
+		r = 0.0;  g = 1.0; b = f;
+		break;
+	case 3:
+		r = 0.0;  g = q;   b = 1.0;
+		break;
+	case 4:
+		r = f;    g = 0.0; b = 1.0;
+		break;
+	default:
+		r = 1.0;  g = 0.0; b = q;
+		break;
+	}
+	*color = jtlabwc_accent_base;
+	color->set = true;
+	color->r = (float)lround(r * 255.0) / 255.0f;
+	color->g = (float)lround(g * 255.0) / 255.0f;
+	color->b = (float)lround(b * 255.0) / 255.0f;
+}
+static void
+jtlabwc_rainbow_stop(void)
+{
+	jtlabwc_rainbow_enabled = false;
+	if (jtlabwc_rainbow_timer) {
+		wl_event_source_timer_update(jtlabwc_rainbow_timer, 0);
+	}
+}
+static void
+jtlabwc_accent_apply(const struct jtlabwc_control_color *color)
+{
+	/* The same RGB drives the close button, snap overlay and the active
+	 * titlebar stripe; unset colors fall back to the current theme. */
+	jtlabwc_close_color = *color;
+	jtlabwc_snap_color = *color;
+	jtlabwc_accent_color = *color;
+}
+static bool
+jtlabwc_color_equal(const struct jtlabwc_control_color *a,
+	const struct jtlabwc_control_color *b)
+{
+	return a->set == b->set && a->has_alpha == b->has_alpha &&
+		a->r == b->r && a->g == b->g && a->b == b->b && a->a == b->a;
+}
+
+static bool
+jtlabwc_accent_tick(double now)
+{
+	struct jtlabwc_control_color color;
+	if (!jtlabwc_rainbow_enabled) {
+		return false;
+	}
+	jtlabwc_rainbow_color(now - jtlabwc_rainbow_start, &color);
+	if (jtlabwc_color_equal(&jtlabwc_accent_color, &color)) {
+		return false;
+	}
+	jtlabwc_accent_apply(&color);
+	jtlabwc_control_refresh_quiet();
+	return true;
+}
+static int
+jtlabwc_rainbow_tick(void *data)
+{
+	(void)data;
+	if (!jtlabwc_rainbow_enabled) {
+		return 0;
+	}
+	jtlabwc_accent_tick(jtlabwc_monotonic_seconds());
+	/* Timer sources are not re-armed by the callback return value. */
+	if (jtlabwc_rainbow_timer) {
+		wl_event_source_timer_update(jtlabwc_rainbow_timer,
+			JTLABWC_RAINBOW_TICK_MS);
+	}
+	return 0;
+}
+static void
+jtlabwc_rainbow_set(bool on, double now)
+{
+	bool was_on = jtlabwc_rainbow_enabled;
+	if (!on) {
+		if (!was_on) {
+			return;
+		}
+		jtlabwc_rainbow_stop();
+		if (jtlabwc_rainbow_colors_saved) {
+			jtlabwc_close_color = jtlabwc_close_before_rainbow;
+			jtlabwc_snap_color = jtlabwc_snap_before_rainbow;
+		} else {
+			jtlabwc_close_color = jtlabwc_accent_base;
+			jtlabwc_snap_color = jtlabwc_accent_base;
+		}
+		jtlabwc_accent_color = jtlabwc_accent_base;
+		jtlabwc_rainbow_colors_saved = false;
+		jtlabwc_control_refresh_quiet();
+		return;
+	}
+	if (!was_on) {
+		jtlabwc_close_before_rainbow = jtlabwc_close_color;
+		jtlabwc_snap_before_rainbow = jtlabwc_snap_color;
+		jtlabwc_rainbow_colors_saved = true;
+		jtlabwc_rainbow_start = now;
+		jtlabwc_rainbow_enabled = true;
+		struct jtlabwc_control_color color;
+		jtlabwc_rainbow_color(0.0, &color);
+		jtlabwc_accent_apply(&color);
+		jtlabwc_control_refresh_quiet();
+	}
+	if (!jtlabwc_rainbow_timer && server.wl_event_loop) {
+		jtlabwc_rainbow_timer = wl_event_loop_add_timer(
+			server.wl_event_loop, jtlabwc_rainbow_tick, NULL);
+	}
+	if (jtlabwc_rainbow_timer) {
+		wl_event_source_timer_update(jtlabwc_rainbow_timer,
+			JTLABWC_RAINBOW_TICK_MS);
+	}
+	/* Rainbow owns the border colour now. Give it one entrance sweep, then
+	 * leave the animator alone while the colour keeps cycling. */
+	if (!was_on) {
+		jtlabwc_border_refresh_all(true);
+	}
+}
+static void
+jtlabwc_accent_set(const struct jtlabwc_control_color *color)
+{
+	bool was_rainbow = jtlabwc_rainbow_enabled;
+	jtlabwc_rainbow_stop();
+	jtlabwc_rainbow_colors_saved = false;
+	jtlabwc_accent_base = *color;
+	jtlabwc_accent_apply(&jtlabwc_accent_base);
+	/* An explicit colour still takes over from rainbow, but the takeover is a
+	 * colour change, not a new window or focus event. Outside rainbow mode,
+	 * keep the old accent-change behaviour. */
+	if (was_rainbow) {
+		jtlabwc_control_refresh_quiet();
+	} else {
+		jtlabwc_control_refresh();
+	}
+}
+static void
+jtlabwc_rainbow_init(void)
+{
+	if (!jtlabwc_rainbow_timer && server.wl_event_loop) {
+		jtlabwc_rainbow_timer = wl_event_loop_add_timer(
+			server.wl_event_loop, jtlabwc_rainbow_tick, NULL);
+	}
+}
+static void
+jtlabwc_rainbow_finish(void)
+{
+	jtlabwc_rainbow_stop();
+	if (jtlabwc_rainbow_timer) {
+		wl_event_source_remove(jtlabwc_rainbow_timer);
+		jtlabwc_rainbow_timer = NULL;
 	}
 }
 #define JTLABWC_KEYBINDS_CONFIG "keybinds.conf"
@@ -14660,7 +15078,20 @@ jtlabwc_control_process_line(char *line)
 	} else if (!strcmp(command, "reload")) {
 		jtlabwc_config_reload();
 		return;
+	} else if (!strcmp(command, "rainbow")) {
+		if (!argument || !strcmp(argument, "toggle")) {
+			jtlabwc_rainbow_set(!jtlabwc_rainbow_enabled,
+				jtlabwc_monotonic_seconds());
+		} else if (!strcmp(argument, "on")) {
+			jtlabwc_rainbow_set(true, jtlabwc_monotonic_seconds());
+		} else if (!strcmp(argument, "off")) {
+			jtlabwc_rainbow_set(false, jtlabwc_monotonic_seconds());
+		}
+		return;
 	} else if (!strcmp(command, "reset")) {
+		jtlabwc_rainbow_stop();
+		jtlabwc_rainbow_colors_saved = false;
+		jtlabwc_accent_base = (struct jtlabwc_control_color){0};
 		jtlabwc_close_color = (struct jtlabwc_control_color){0};
 		jtlabwc_snap_color = (struct jtlabwc_control_color){0};
 		jtlabwc_accent_color = (struct jtlabwc_control_color){0};
@@ -14679,16 +15110,17 @@ jtlabwc_control_process_line(char *line)
 	if (!jtlabwc_control_parse_color(argument, &color)) {
 		return;
 	}
-	if (set_close) {
-		jtlabwc_close_color = color;
-	}
-	if (set_snap) {
-		jtlabwc_snap_color = color;
-	}
 	if (set_accent) {
-		jtlabwc_accent_color = color;
+		jtlabwc_accent_set(&color);
+	} else {
+		if (set_close) {
+			jtlabwc_close_color = color;
+		}
+		if (set_snap) {
+			jtlabwc_snap_color = color;
+		}
+		jtlabwc_control_refresh();
 	}
-	jtlabwc_control_refresh();
 }
 static void
 jtlabwc_control_process_buffer(struct jtlabwc_control_client *client)
@@ -14848,6 +15280,7 @@ static void
 jtlabwc_control_init(void)
 {
 	wl_list_init(&jtlabwc_control_clients);
+	jtlabwc_rainbow_init();
 	if (!jtlabwc_control_open_socket()) {
 		return;
 	}
@@ -14880,6 +15313,7 @@ jtlabwc_control_finish(void)
 		unlink(jtlabwc_control_path);
 		jtlabwc_control_path[0] = '\0';
 	}
+	jtlabwc_rainbow_finish();
 }
 void
 view_impl_map(struct view *view)
@@ -21399,6 +21833,7 @@ main(int argc, char *argv[])
 {
 	char *startup_cmd = NULL;
 	char *primary_client = NULL;
+	bool rainbow_arg = jtlabwc_strip_rainbow_arg(&argc, argv);
 	server.wlr_version = _LAB_CALC_WLR_VERSION_NUM(
 		wlr_version_get_major(),
 		wlr_version_get_minor(),
@@ -21467,6 +21902,9 @@ main(int argc, char *argv[])
 	theme_init(&theme);
 	rc.theme = &theme;
 	jtlabwc_control_init();
+	if (rainbow_arg) {
+		jtlabwc_rainbow_set(true, jtlabwc_monotonic_seconds());
+	}
 	menu_init();
 	struct LABWC_src_main_c_idle_ctx idle_ctx = {
 		.primary_client = primary_client,

@@ -6,6 +6,9 @@
  *   jtlabwcctl accent '#RRGGBB'   close button, snap overlay and active
  *                                 titlebar stripe
  *   jtlabwcctl '#RRGGBB'          shorthand for accent
+ *   jtlabwcctl rainbow [on|off|toggle]
+ *                                 cycle the accent through the hue wheel;
+ *                                 with no argument, toggle it
  *   jtlabwcctl reload             re-read ~/.config/jt/input.conf
  *   jtlabwcctl reset              return to the theme colors
  *
@@ -70,12 +73,14 @@ static void
 usage(const char *prog)
 {
 	fprintf(stderr,
-		"usage: %s close COLOR | snap COLOR | accent COLOR | reload | reset\n"
+		"usage: %s close COLOR | snap COLOR | accent COLOR | "
+		"rainbow [on|off|toggle] | reload | reset\n"
 		"       %s COLOR\n"
 		"  close COLOR    change the SSD close-button color\n"
 		"  snap COLOR     change the window snapping overlay color\n"
 		"  accent COLOR   change both colors and the active titlebar stripe\n"
 		"  COLOR          shorthand for accent\n"
+		"  rainbow        toggle the cycling accent (on/off/toggle optional)\n"
 		"  reload         re-read ~/.config/jt/input.conf\n"
 		"  reset          return to the theme colors\n"
 		"COLOR is #RRGGBB, RRGGBB, or #RRGGBBAA\n",
@@ -108,6 +113,20 @@ main(int argc, char *argv[])
 			return 1;
 		}
 		snprintf(msg, sizeof(msg), "reset\n");
+	} else if (!strcmp(argv[1], "rainbow")) {
+		const char *mode = argc == 3 ? argv[2] : NULL;
+		if ((argc != 2 && argc != 3)
+				|| (mode && strcmp(mode, "on")
+					&& strcmp(mode, "off")
+					&& strcmp(mode, "toggle"))) {
+			usage(argv[0]);
+			return 1;
+		}
+		if (mode) {
+			snprintf(msg, sizeof(msg), "rainbow %s\n", mode);
+		} else {
+			snprintf(msg, sizeof(msg), "rainbow\n");
+		}
 	} else {
 		const char *command;
 		const char *color_arg;
